@@ -1,0 +1,15 @@
+# scratch / caches
+tools/.debias_cache/
+**/__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# reference binary
+*.xlsx
+
+# DATA — never on GitHub. Patient demographics / labels / folds / holdout lists
+# live locally and on the private HF dataset repo, not here.
+data/
+
+# transient
+pulltest_*/
