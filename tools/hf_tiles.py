@@ -21,6 +21,7 @@ Examples
   python hf_tiles.py list
 """
 import argparse
+import os
 import shutil
 import sys
 
@@ -69,6 +70,21 @@ def push_metadata():
     print("metadata pushed")
 
 
+def set_public():
+    HfApi().update_repo_settings(REPO, repo_type=REPO_TYPE, private=False)
+    print(f"{REPO} is now PUBLIC")
+
+
+def push_card():
+    card = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hf_dataset_card.md")
+    HfApi().upload_file(
+        path_or_fileobj=card, path_in_repo="README.md",
+        repo_id=REPO, repo_type=REPO_TYPE,
+        commit_message="add dataset card (CC BY attribution)",
+    )
+    print("dataset card pushed")
+
+
 def pull(cohort: str, dest: str):
     snapshot_download(
         repo_id=REPO, repo_type=REPO_TYPE,
@@ -87,13 +103,19 @@ def ls():
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
-    sp = sub.add_parser("push"); sp.add_argument("--cohort", required=True); sp.add_argument("--dir", required=True); sp.add_argument("--clean", action="store_true")
+    sp = sub.add_parser("push"); sp.add_argument("--cohort", required=True); sp.add_argument("--dir", required=True); sp.add_argument("--clean", action="store_true"); sp.add_argument("--public", action="store_true")
     sub.add_parser("push-metadata")
+    sub.add_parser("push-card")
+    sub.add_parser("set-public")
     pl = sub.add_parser("pull"); pl.add_argument("--cohort", required=True); pl.add_argument("--dest", required=True)
     sub.add_parser("list")
     a = p.parse_args()
-    if a.cmd == "push": push(a.cohort, a.dir, a.clean)
+    if a.cmd == "push":
+        if a.public: set_public()
+        push(a.cohort, a.dir, a.clean)
     elif a.cmd == "push-metadata": push_metadata()
+    elif a.cmd == "push-card": push_card()
+    elif a.cmd == "set-public": set_public()
     elif a.cmd == "pull": pull(a.cohort, a.dest)
     elif a.cmd == "list": ls()
 
