@@ -32,3 +32,14 @@ self-supervised pretraining vs. post-hoc on a frozen encoder — holding the
 
 Pretraining-time method code + configs live in the nanopath worktree
 `nanopath-tests/20260710_fino-fairness` (branch `exp/20260710-fino-fairness`).
+
+## Data provenance & licensing
+- **CPTAC** whole-slide images (source of the external tiles) are from The Cancer
+  Imaging Archive (TCIA) collections CPTAC-LUAD, CPTAC-LSCC, CPTAC-GBM,
+  CPTAC-CCRCC, released under **CC BY 3.0**. Tiles are a derivative (tiled +
+  packed to parquet) redistributed under the same license with attribution; they
+  live in the public HF dataset `ryankim17920/nanopath-fairness-tiles`, not here.
+- **Demographics** (case-level race/sex/age) are from the NCI Genomic Data Commons
+  (GDC) **open-access** clinical data; de-identified, no PHI.
+- **No TCGA data** is redistributed in this repo or the HF dataset.
+- Please cite CPTAC, the TCIA collection DOIs, and the GDC when using this work.
