@@ -1,0 +1,238 @@
+{
+  "task": "brca_tp53",
+  "sensitive": "race",
+  "method": "dann",
+  "proto_temp": 0.1,
+  "proto_ema": 0.9,
+  "adversary_data": "matched_pool",
+  "fold_col": null,
+  "race_weight": "none",
+  "hf_repo": "ryankim17920/nanopath-fairness-tiles",
+  "tiles_dir": "/data/TCGA-12K-parquet",
+  "eval_fold": 0,
+  "lambda_adv": 1.0,
+  "checkpoint": "/data/ryan.kim/nanopath/fair-baseline/latest.pt",
+  "backbone": {
+    "variant": "dinov2_vits14_reg",
+    "weights": "model_ema",
+    "random_init": false,
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "embed_dim": 384
+  },
+  "n_cohort_patients": 1061,
+  "n_task_tiles": 2529185,
+  "n_pool_tiles": 894937,
+  "min_n": 15,
+  "epochs": 20,
+  "hidden": 128,
+  "runs": {
+    "baseline": {
+      "lambda": 0.0,
+      "overall_auc": 0.36376840629069407,
+      "n_eval_patients": 216,
+      "n_eval_tiles": 516732,
+      "n_train_task_tiles": 2012453,
+      "n_adversary_tiles": 2907390,
+      "attributes": {
+        "race": {
+          "attr_overall_auc": 0.35458409228901033,
+          "subgroups": {
+            "Asian": {
+              "n": 13,
+              "n_pos": 6,
+              "n_neg": 7,
+              "auc": 0.35714285714285715,
+              "ece": 0.12672853240600002,
+              "low_power": true
+            },
+            "Black": {
+              "n": 36,
+              "n_pos": 14,
+              "n_neg": 22,
+              "auc": 0.36525974025974023,
+              "ece": 0.05407863193088108,
+              "low_power": false
+            },
+            "White": {
+              "n": 147,
+              "n_pos": 41,
+              "n_neg": 106,
+              "auc": 0.36930510814542106,
+              "ece": 0.05589902015770376,
+              "low_power": false
+            }
+          },
+          "auc_delta": 0.004045367885680828,
+          "es_auc": 0.3458018782366406,
+          "ece_delta": 0.0018203882268226779,
+          "n_powered_subgroups": 2,
+          "min_n": 15
+        },
+        "sex": {
+          "attr_overall_auc": 0.36376840629069407,
+          "subgroups": {
+            "F": {
+              "n": 215,
+              "n_pos": 67,
+              "n_neg": 148,
+              "auc": 0.3612847922549415,
+              "ece": 0.02318255859752033,
+              "low_power": false
+            },
+            "M": {
+              "n": 1,
+              "n_pos": 0,
+              "n_neg": 1,
+              "auc": null,
+              "ece": 0.3348095118999481,
+              "low_power": true
+            }
+          },
+          "auc_delta": null,
+          "es_auc": null,
+          "ece_delta": null,
+          "n_powered_subgroups": 1,
+          "min_n": 15
+        },
+        "age": {
+          "attr_overall_auc": 0.36376840629069407,
+          "subgroups": {
+            "age<60": {
+              "n": 108,
+              "n_pos": 45,
+              "n_neg": 63,
+              "auc": 0.37848324514991183,
+              "ece": 0.08185620109240216,
+              "low_power": false
+            },
+            "age>=60": {
+              "n": 108,
+              "n_pos": 22,
+              "n_neg": 86,
+              "auc": 0.3298097251585624,
+              "ece": 0.13110679167288322,
+              "low_power": false
+            }
+          },
+          "auc_delta": 0.048673519991349445,
+          "es_auc": 0.3468843251555496,
+          "ece_delta": 0.04925059058048106,
+          "n_powered_subgroups": 2,
+          "min_n": 15
+        }
+      },
+      "adversary_demo_auc": {
+        "race": 0.5466859125731124
+      }
+    },
+    "debiased": {
+      "lambda": 1.0,
+      "overall_auc": 0.5574476610237403,
+      "n_eval_patients": 216,
+      "n_eval_tiles": 516732,
+      "n_train_task_tiles": 2012453,
+      "n_adversary_tiles": 2907390,
+      "attributes": {
+        "race": {
+          "attr_overall_auc": 0.5517911353976928,
+          "subgroups": {
+            "Asian": {
+              "n": 13,
+              "n_pos": 6,
+              "n_neg": 7,
+              "auc": 0.5,
+              "ece": 0.3226318657398224,
+              "low_power": true
+            },
+            "Black": {
+              "n": 36,
+              "n_pos": 14,
+              "n_neg": 22,
+              "auc": 0.6818181818181818,
+              "ece": 0.11424071631497806,
+              "low_power": false
+            },
+            "White": {
+              "n": 147,
+              "n_pos": 41,
+              "n_neg": 106,
+              "auc": 0.5179475379659457,
+              "ece": 0.10244312051202165,
+              "low_power": false
+            }
+          },
+          "auc_delta": 0.16387064385223604,
+          "es_auc": 0.4741000542563282,
+          "ece_delta": 0.011797595802956418,
+          "n_powered_subgroups": 2,
+          "min_n": 15
+        },
+        "sex": {
+          "attr_overall_auc": 0.5574476610237403,
+          "subgroups": {
+            "F": {
+              "n": 215,
+              "n_pos": 67,
+              "n_neg": 148,
+              "auc": 0.558995562726906,
+              "ece": 0.09147428884062656,
+              "low_power": false
+            },
+            "M": {
+              "n": 1,
+              "n_pos": 0,
+              "n_neg": 1,
+              "auc": null,
+              "ece": 0.4373242259025574,
+              "low_power": true
+            }
+          },
+          "auc_delta": null,
+          "es_auc": null,
+          "ece_delta": null,
+          "n_powered_subgroups": 1,
+          "min_n": 15
+        },
+        "age": {
+          "attr_overall_auc": 0.5574476610237403,
+          "subgroups": {
+            "age<60": {
+              "n": 108,
+              "n_pos": 45,
+              "n_neg": 63,
+              "auc": 0.5044091710758377,
+              "ece": 0.16480176481935715,
+              "low_power": false
+            },
+            "age>=60": {
+              "n": 108,
+              "n_pos": 22,
+              "n_neg": 86,
+              "auc": 0.6828752642706131,
+              "ece": 0.1621091621065581,
+              "low_power": false
+            }
+          },
+          "auc_delta": 0.17846609319477535,
+          "es_auc": 0.4730281713176165,
+          "ece_delta": 0.002692602712799058,
+          "n_powered_subgroups": 2,
+          "min_n": 15
+        }
+      },
+      "adversary_demo_auc": {
+        "race": 0.540291670358715
+      }
+    }
+  },
+  "elapsed_sec": 5014.7
+}
