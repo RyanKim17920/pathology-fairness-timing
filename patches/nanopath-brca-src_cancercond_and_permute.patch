@@ -1,0 +1,103 @@
+diff --git a/dataloader.py b/dataloader.py
+index 6c3e1ef..c4ac947 100644
+--- a/dataloader.py
++++ b/dataloader.py
+@@ -168,6 +168,27 @@ class TCGATileDataset(Dataset):
+             # pseudo-labels): a dense FM-distillation M+ target, looked up by global tile index not patient barcode.
+             tile_npy = cfg["fino"].get("tile_npy", {})
+             self.meta_disc = {f: meta["discrete"][f] for f in self.fino_disc if f not in tile_npy}
++            # Placebo demographics (fino.permute_labels): when set to an int seed, RANDOMLY PERMUTE the
++            # per-patient DEMOGRAPHIC discrete-factor labels (race, sex ONLY) across patients, so the
++            # fairness objective trains to be invariant to a demographic signal that is pure NOISE. Values
++            # are re-assigned among the SAME barcodes, so each factor's marginal label distribution (and
++            # thus train.py's inverse-freq race_weights, computed from fino_meta directly) is preserved;
++            # only the patient->label association is destroyed. The `cancer` conditioner and every
++            # continuous / SSL / task signal are left untouched. Absent -> no-op (byte-identical). One
++            # rng seeded once, advanced once per factor in fixed sorted order, so the train and val
++            # dataset instances (same barcode keys from fino_meta) receive the identical permutation.
++            permute_seed = (cfg.get("fino") or {}).get("permute_labels")
++            if permute_seed is not None:
++                _DEMOGRAPHIC_FACTORS = ("race", "sex")
++                _rng = np.random.default_rng(int(permute_seed))
++                for f in sorted(k for k in self.meta_disc if k in _DEMOGRAPHIC_FACTORS):
++                    m = self.meta_disc[f]
++                    keys = list(m.keys())
++                    vals = [m[k] for k in keys]
++                    perm = _rng.permutation(len(vals))
++                    self.meta_disc[f] = {k: vals[int(perm[i])] for i, k in enumerate(keys)}
++                    print(f"[placebo] permuted demographic factor {f!r} across {len(keys)} patients "
++                          f"(seed={int(permute_seed)})", flush=True)
+             gidx = np.concatenate([[0], np.cumsum(shard_sizes)])[:-1][self.shard_of] + self.row_of
+             self.tile_label = {f: np.load(dataset_dir / tile_npy[f])[gidx] for f in self.fino_disc if f in tile_npy}
+             self.meta_cont = {f: meta["continuous"][f] for f in self.fino_cont}
+diff --git a/train.py b/train.py
+index 3039d51..ef19fa7 100644
+--- a/train.py
++++ b/train.py
+@@ -214,11 +214,13 @@ def update_ema(student_module, teacher_module, momentum):
+         bt.copy_(bs)
+ 
+ 
+-def fair_supcon(z, y, temp, w=None):
++def fair_supcon(z, y, temp, w=None, cond=None):
+     # Fairness (cross-demographic) supervised contrastive loss. z: (N, D) L2-normalized CLS features; y: (N,) demographic
+     # labels. Positives for anchor i are DIFFERENT-demographic tiles (y_j != y_i); the SupCon objective pulls them
+     # together against all other tiles, so minimizing it destroys demographic cluster structure (the sensitive attribute
+     # becomes non-separable in the representation). Anchors with no cross-demographic partner contribute nothing.
++    # cond (optional): conditioning labels, e.g. cancer type. When set, positives are SAME-COND AND DIFFERENT-demographic
++    # tiles. The denominator remains all non-self tiles, so different-cond/same-demo pairs stay in the denominator.
+     # w (optional): per-class weight vector; when given, each valid anchor's contribution is scaled by w[y_i] so
+     # minority-demographic anchors dominate the reduction (weighted mean). w=None reduces to the plain mean below.
+     n = z.shape[0]
+@@ -229,7 +231,10 @@ def fair_supcon(z, y, temp, w=None):
+     sim = sim.masked_fill(self_mask, float("-inf"))
+     logdenom = torch.logsumexp(sim, dim=1, keepdim=True)
+     logprob = sim - logdenom
+-    pos = (y[:, None] != y[None, :]) & ~self_mask
++    if cond is not None:
++        pos = (cond[:, None] == cond[None, :]) & (y[:, None] != y[None, :]) & ~self_mask
++    else:
++        pos = (y[:, None] != y[None, :]) & ~self_mask
+     pos_count = pos.sum(1)
+     valid = pos_count > 0
+     if not bool(valid.any()):
+@@ -286,6 +291,11 @@ def main():
+     # SupCon term added to meta_loss. Unused by fino/dann/pcgrad.
+     contrastive_temp = float(fino_cfg.get("contrastive_temp", 0.2)) if fino_cfg else 0.2
+     contrastive_weight = float(fino_cfg.get("contrastive_weight", 0.1)) if fino_cfg else 0.1
++    # Contrastive cancer conditioning: when set, the named discrete factor is used as a
++    # condition (same-cancer positives) for the demographic contrastive loss. The conditioner
++    # factor itself is skipped as a contrastive target.
++    contrastive_condition_on = fino_cfg.get("contrastive_condition_on") if fino_cfg else None
++    cond_factor_col = [f for f, _ in fino_disc].index(contrastive_condition_on) if contrastive_condition_on else None
+     # Inverse-frequency demographic reweighting (ablation axis; default "none" == current behavior, byte-identical).
+     # "inverse_freq" upweights minority demographic classes in the discrete-factor loss (see race_weights below).
+     race_weight_mode = (fino_cfg.get("race_weight", "none") if fino_cfg else "none")
+@@ -617,7 +627,26 @@ def main():
+                         elif fairness_method == "contrastive":
+                             # Cross-demographic supervised contrastive: DIFFERENT-demographic tiles are positives pulled
+                             # together, removing demographic separability from the CLS features (see fair_supcon).
+-                            terms.append((f, contrastive_weight * fair_supcon(phi_s[ok], lab[ok], contrastive_temp, w=race_weights.get(f))))
++                            # When contrastive_condition_on is set, skip the conditioner factor itself and condition
++                            # the contrastive loss on same-cancer tiles.
++                            if cond_factor_col is not None and j == cond_factor_col:
++                                continue  # conditioner is not a contrastive target
++                            contrastive_cond = None
++                            if cond_factor_col is not None:
++                                cond_label = md[:, cond_factor_col].repeat(train_cfg["global_views"])
++                                cond_mask = cond_label >= 0
++                                contrastive_cond = cond_label[ok & cond_mask] if (ok & cond_mask).any() else None
++                                if contrastive_cond is not None:
++                                    phi_s_use = phi_s[ok & cond_mask]
++                                    lab_use = lab[ok & cond_mask]
++                                else:
++                                    phi_s_use = phi_s[ok]
++                                    lab_use = lab[ok]
++                            else:
++                                phi_s_use = phi_s[ok]
++                                lab_use = lab[ok]
++                            terms.append((f, contrastive_weight * fair_supcon(phi_s_use, lab_use, contrastive_temp,
++                                                                              w=race_weights.get(f), cond=contrastive_cond)))
+                         else:
+                             logits = (GradScale.apply(phi_s[ok], sign * gamma) @ protos[f].t()) / 0.023
+                             terms.append((f, 0.03 * F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))

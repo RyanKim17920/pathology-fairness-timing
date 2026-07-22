@@ -62,8 +62,9 @@ ARM_LIST = [
     "B_dann_marginal", "B_fino_marginal", "B_pcgrad_marginal",
 ]
 FOLDS = ["F1", "F2", "F3"]
+TASK = "brca_tp53"  # pred-file task suffix; overridable via --task
 RACE_MAP = {"white": "White", "black or african american": "Black",
-            "asian": "Asian"}
+            "black": "Black", "asian": "Asian"}
 TARGET_SPEC = 0.80
 BOOT_N_DEFAULT = 10000
 BOOT_SEED = 20260716
@@ -101,7 +102,7 @@ def load_arm_folds(preds_dir: Path, arm: str) -> dict[str, list[dict]]:
     """Load all folds for one arm. Returns {fold: [rows]} for folds that exist."""
     folds = {}
     for fold in FOLDS:
-        p = preds_dir / f"hh_{arm}__brca_tp53__{fold}.jsonl"
+        p = preds_dir / f"hh_{arm}__{TASK}__{fold}.jsonl"
         if p.exists():
             raw = load_jsonl(p)
             folds[fold] = [normalize_pred_row(r) for r in raw]
@@ -128,6 +129,8 @@ def load_demographics(csv_path: Path) -> dict[str, dict]:
     """Load tcga12k_demographics.csv keyed by patient_barcode."""
     import csv
     rows = {}
+    if not Path(csv_path).exists():
+        return rows
     with open(csv_path, newline="") as fh:
         for r in csv.DictReader(fh):
             bc = r["patient_barcode"].strip()
@@ -498,6 +501,74 @@ def paired_bootstrap_eo_diff(
 
 
 # --------------------------------------------------------------------------- #
+# Single-arm EO bootstrap CI (TSS-cluster bootstrap within target)
+# --------------------------------------------------------------------------- #
+def single_arm_bootstrap_eo_ci(
+    patients: list[dict],
+    n_boot: int = BOOT_N_DEFAULT,
+    seed: int = BOOT_SEED,
+) -> dict:
+    """TSS-cluster bootstrap 95% CI for one arm's EO (max|FPRdisp|,|TPRdisp|).
+
+    Clusters (TSS) are resampled with replacement within the target set; tau is
+    refit to White 80% spec on each draw. Returns point EO, CI, and whether the
+    CI excludes 0 (the meta baseline-gap gate).
+    """
+    rng = np.random.default_rng(seed)
+    idx = {p["patient_barcode"]: p for p in patients}
+    bcs = sorted(idx.keys())
+    if not bcs:
+        return {"error": "no patients"}
+
+    tss_groups = defaultdict(list)
+    for bc in bcs:
+        tss = idx[bc].get("tss") or bc[:7]
+        tss_groups[tss].append(bc)
+    tss_clusters = list(tss_groups.keys())
+
+    def compute_eo(sample_bcs: list[str]) -> float | None:
+        black_p = [idx[bc] for bc in sample_bcs if idx[bc]["race"] == "Black"]
+        white_p = [idx[bc] for bc in sample_bcs if idx[bc]["race"] == "White"]
+        if not black_p or not white_p:
+            return None
+        bl_y = np.array([p["label"] for p in black_p], dtype=int)
+        bl_s = np.array([p["score"] for p in black_p], dtype=float)
+        wh_y = np.array([p["label"] for p in white_p], dtype=int)
+        wh_s = np.array([p["score"] for p in white_p], dtype=float)
+        tau = threshold_at_spec(wh_y, wh_s, target_spec=TARGET_SPEC)
+        if tau is None:
+            return None
+        bl_at = group_metrics(bl_y, bl_s, tau)
+        wh_at = group_metrics(wh_y, wh_s, tau)
+        fpr_disp = (bl_at["fpr"] or 0) - (wh_at["fpr"] or 0)
+        tpr_disp = (bl_at["tpr"] or 0) - (wh_at["tpr"] or 0)
+        return max(abs(fpr_disp), abs(tpr_disp))
+
+    eo_full = compute_eo(bcs)
+    draws = []
+    for _ in range(n_boot):
+        sampled = rng.choice(tss_clusters, size=len(tss_clusters), replace=True)
+        sample_bcs = []
+        for cl in sampled:
+            sample_bcs.extend(tss_groups[cl])
+        eo = compute_eo(sample_bcs)
+        if eo is not None:
+            draws.append(eo)
+    draws = np.array(draws)
+    if len(draws) == 0:
+        return {"error": "all bootstrap draws failed", "eo": eo_full}
+    ci_lo = float(np.percentile(draws, 2.5))
+    ci_hi = float(np.percentile(draws, 97.5))
+    return {
+        "eo": eo_full,
+        "ci_95_lo": ci_lo,
+        "ci_95_hi": ci_hi,
+        "ci_excludes_zero": bool(ci_lo > 0),
+        "n_bootstrap_draws": len(draws),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Formatting helpers
 # --------------------------------------------------------------------------- #
 def f3(x) -> str:
@@ -516,6 +587,7 @@ def fs(x) -> str:
 # Main
 # --------------------------------------------------------------------------- #
 def main():
+    global TASK, FOLDS
     ap = argparse.ArgumentParser(
         description="Hospital-holdout fairness analysis for nanopath-JEPA"
     )
@@ -537,7 +609,33 @@ def main():
         "--seed", type=int, default=BOOT_SEED,
         help=f"Random seed (default: {BOOT_SEED})",
     )
+    ap.add_argument(
+        "--metadata-csv", default=str(METADATA_CSV),
+        help="Fold/race metadata CSV (patient_barcode,tss,race,tp53_status,fold)",
+    )
+    ap.add_argument(
+        "--demo-csv", default=str(DEMO_CSV),
+        help="Demographics CSV (optional fallback for race)",
+    )
+    ap.add_argument(
+        "--task", default=TASK,
+        help=f"Pred-file task suffix (default: {TASK})",
+    )
+    ap.add_argument(
+        "--folds", default=",".join(FOLDS),
+        help=f"Comma-separated fold labels (default: {','.join(FOLDS)})",
+    )
+    ap.add_argument(
+        "--out-name", default="hh_arms_table.json",
+        help="Output JSON filename inside --out-dir",
+    )
     args = ap.parse_args()
+
+    # Wire generalization globals (defaults keep BRCA behaviour unchanged)
+    TASK = args.task
+    FOLDS = [f.strip() for f in args.folds.split(",") if f.strip()]
+    metadata_csv = Path(args.metadata_csv)
+    demo_csv = Path(args.demo_csv)
 
     preds_dir = Path(args.preds_dir)
     out_dir = Path(args.out_dir)
@@ -557,8 +655,10 @@ def main():
 
     # Load reference data
     log("[1] Loading metadata + demographics ...")
-    metadata = load_metadata(METADATA_CSV)
-    demographics = load_demographics(DEMO_CSV)
+    log(f"  metadata-csv : {metadata_csv}")
+    log(f"  task         : {TASK}   folds: {FOLDS}")
+    metadata = load_metadata(metadata_csv)
+    demographics = load_demographics(demo_csv)
     log(f"  metadata : {len(metadata)} patients")
     log(f"  demo     : {len(demographics)} patients")
     log("")
@@ -620,6 +720,25 @@ def main():
             f"Black={result['n_black']}  White={result['n_white']}  "
             f"auroc_ok={result['auroc_ok']}")
     log("")
+
+    # Baseline EO bootstrap CI (TSS-cluster bootstrap within target) -> meta gate
+    baseline_eo_ci = {}
+    if "baseline" in arm_patients and "baseline" in arm_results:
+        log("[3b] Baseline EO TSS-cluster bootstrap CI ...")
+        baseline_eo_ci = single_arm_bootstrap_eo_ci(
+            arm_patients["baseline"], n_boot=args.boot_n, seed=args.seed,
+        )
+        if "error" not in baseline_eo_ci:
+            arm_results["baseline"]["ci_95_lo"] = baseline_eo_ci["ci_95_lo"]
+            arm_results["baseline"]["ci_95_hi"] = baseline_eo_ci["ci_95_hi"]
+            arm_results["baseline"]["ci_excludes_zero"] = baseline_eo_ci["ci_excludes_zero"]
+            log(f"  baseline EO={f3(arm_results['baseline']['eo'])}  "
+                f"95% CI=[{f3(baseline_eo_ci['ci_95_lo'])}, "
+                f"{f3(baseline_eo_ci['ci_95_hi'])}]  "
+                f"excludes 0: {baseline_eo_ci['ci_excludes_zero']}")
+        else:
+            log(f"  baseline EO CI error: {baseline_eo_ci['error']}")
+        log("")
 
     # Print full per-arm table
     log("=" * 72)
@@ -823,11 +942,12 @@ def main():
         "arms_missing": missing_arms,
         "arms_table": arm_results,
         "confirmatory_contrast": confirmatory,
+        "baseline_eo_ci": baseline_eo_ci,
         "guardrail_checks": guardrail_results,
         "per_fold_eo": per_fold_results,
     }
 
-    out_path = out_dir / "hh_arms_table.json"
+    out_path = out_dir / args.out_name
     out_path.write_text(json.dumps(output, indent=2, default=str))
     log(f"[OUTPUT] {out_path}")
 

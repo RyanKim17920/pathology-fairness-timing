@@ -1,0 +1,218 @@
+{
+  "meta_analysis_version": "1.0",
+  "eo_gate_threshold": 0.1,
+  "k_total": 3,
+  "k_confirmatory": 3,
+  "k_specificity_controls": 0,
+  "confirmatory_cohorts": [
+    "brca",
+    "ucec",
+    "coad"
+  ],
+  "specificity_control_cohorts": [],
+  "per_cohort": {
+    "brca": {
+      "baseline_eo": 0.23597521200260924,
+      "baseline_eo_ci_available": true,
+      "passes_baseline_gate": true,
+      "eo_by_arm": {
+        "baseline": 0.23597521200260924,
+        "A_marginal": 0.22227658186562294,
+        "A_cancercond": 0.22227658186562294,
+        "B_contrastive_marginal": 0.19487932159165033,
+        "B_contrastive_labelcond": 0.23597521200260924
+      },
+      "eo_reduction_by_arm": {
+        "baseline": 0.0,
+        "A_marginal": 0.0136986301369863,
+        "A_cancercond": 0.0136986301369863,
+        "B_contrastive_marginal": 0.0410958904109589,
+        "B_contrastive_labelcond": 0.0
+      },
+      "confirmatory_contrast": {
+        "eo_diff": -0.0136986301369863,
+        "eo_a_full": 0.22227658186562294,
+        "eo_b_full": 0.23597521200260924,
+        "ci_95_lo": -0.15714285714285714,
+        "ci_95_hi": 0.05102437759336101,
+        "ci_excludes_zero": false,
+        "verdict": "indistinguishable"
+      },
+      "guardrails": {
+        "A_marginal": true,
+        "A_cancercond": true,
+        "B_contrastive_marginal": true,
+        "B_contrastive_labelcond": true
+      }
+    },
+    "ucec": {
+      "baseline_eo": 0.33288043478260865,
+      "baseline_eo_ci_available": true,
+      "passes_baseline_gate": true,
+      "eo_by_arm": {
+        "baseline": 0.33288043478260865,
+        "A_marginal": 0.33288043478260865,
+        "A_cancercond": 0.30163043478260865,
+        "B_contrastive_marginal": 0.30163043478260865,
+        "B_contrastive_labelcond": 0.25815217391304346
+      },
+      "eo_reduction_by_arm": {
+        "baseline": 0.0,
+        "A_marginal": 0.0,
+        "A_cancercond": 0.03125,
+        "B_contrastive_marginal": 0.03125,
+        "B_contrastive_labelcond": 0.07472826086956519
+      },
+      "confirmatory_contrast": {
+        "eo_diff": 0.04347826086956519,
+        "eo_a_full": 0.30163043478260865,
+        "eo_b_full": 0.25815217391304346,
+        "ci_95_lo": -0.14000000000000012,
+        "ci_95_hi": 0.0625,
+        "ci_excludes_zero": false,
+        "verdict": "indistinguishable"
+      },
+      "guardrails": {
+        "A_marginal": true,
+        "A_cancercond": true,
+        "B_contrastive_marginal": true,
+        "B_contrastive_labelcond": true
+      }
+    },
+    "coad": {
+      "baseline_eo": 0.09821428571428573,
+      "baseline_eo_ci_available": true,
+      "passes_baseline_gate": true,
+      "eo_by_arm": {
+        "baseline": 0.09821428571428573,
+        "A_marginal": 0.09821428571428573,
+        "A_cancercond": 0.09821428571428573,
+        "B_contrastive_marginal": 0.056277056277056314,
+        "B_contrastive_labelcond": 0.035714285714285726
+      },
+      "eo_reduction_by_arm": {
+        "baseline": 0.0,
+        "A_marginal": 0.0,
+        "A_cancercond": 0.0,
+        "B_contrastive_marginal": 0.04193722943722941,
+        "B_contrastive_labelcond": 0.0625
+      },
+      "confirmatory_contrast": {
+        "eo_diff": 0.0625,
+        "eo_a_full": 0.09821428571428573,
+        "eo_b_full": 0.035714285714285726,
+        "ci_95_lo": -0.1538461538461538,
+        "ci_95_hi": 0.162359417740703,
+        "ci_excludes_zero": false,
+        "verdict": "indistinguishable"
+      },
+      "guardrails": {
+        "A_marginal": true,
+        "A_cancercond": false,
+        "B_contrastive_marginal": true,
+        "B_contrastive_labelcond": true
+      }
+    }
+  },
+  "meta_results": {
+    "bake_in_reduction": {
+      "meta": {
+        "pooled": 0.018048921526321433,
+        "se": 0.025630509283969944,
+        "ci_95_lo": -0.032186876670259656,
+        "ci_95_hi": 0.06828471972290252,
+        "tau2": 0.0,
+        "i2": 0.0,
+        "weights": [
+          0.5949608584693448,
+          0.3167607289653129,
+          0.08827841256534236
+        ],
+        "k": 3
+      },
+      "sign_consistency": {
+        "positive": 2,
+        "negative": 0,
+        "zero": 1,
+        "missing": 0
+      },
+      "per_cohort": {
+        "brca": 0.0136986301369863,
+        "ucec": 0.03125,
+        "coad": 0.0
+      },
+      "per_cohort_se": {
+        "brca": 0.03322867608581896,
+        "ucec": 0.0455398471828045,
+        "coad": 0.08626407668901383
+      },
+      "k_confirmatory": 3
+    },
+    "posthoc_reduction": {
+      "meta": {
+        "pooled": 0.03842001977801739,
+        "se": 0.031688060002310316,
+        "ci_95_lo": -0.023688577826510827,
+        "ci_95_hi": 0.10052861738254562,
+        "tau2": 0.0,
+        "i2": 0.0,
+        "weights": [
+          0.44977820479226327,
+          0.3296591085627688,
+          0.220562686644968
+        ],
+        "k": 3
+      },
+      "sign_consistency": {
+        "positive": 2,
+        "negative": 0,
+        "zero": 1,
+        "missing": 0
+      },
+      "per_cohort": {
+        "brca": 0.0,
+        "ucec": 0.07472826086956519,
+        "coad": 0.0625
+      },
+      "per_cohort_se": {
+        "brca": 0.047249416366549876,
+        "ucec": 0.05519034536891683,
+        "coad": 0.06747293938613312
+      },
+      "k_confirmatory": 3
+    },
+    "head_to_head": {
+      "meta": {
+        "pooled": 0.023827687120514328,
+        "se": 0.033652188536442536,
+        "ci_95_lo": -0.042130602410913036,
+        "ci_95_hi": 0.08978597665194168,
+        "tau2": 0.0,
+        "i2": 0.0,
+        "weights": [
+          0.40158179307339287,
+          0.4243739388909346,
+          0.17404426803567252
+        ],
+        "k": 3
+      },
+      "sign_consistency": {
+        "positive": 2,
+        "negative": 1,
+        "zero": 0,
+        "missing": 0
+      },
+      "per_cohort": {
+        "brca": -0.0136986301369863,
+        "ucec": 0.04347826086956519,
+        "coad": 0.0625
+      },
+      "per_cohort_se": {
+        "brca": 0.05310388641230055,
+        "ucec": 0.05165816326530615,
+        "coad": 0.08066468662930021
+      },
+      "k_confirmatory": 3
+    }
+  }
+}

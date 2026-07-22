@@ -92,6 +92,7 @@ SEED = 1337
 TASK_COHORT = {
     "brca_tp53":  "cptac_brca",   # TP53 status  -> breast   (not yet in repo)
     "ucec_tp53":  "cptac_ucec",   # TP53 status  -> uterine  (not yet in repo)
+    "coad_tp53":  "cptac_coad",   # TP53 status  -> colon    (not yet in repo)
     "lihc_grade": "cptac_hcc",    # tumor grade  -> liver/HCC(not yet in repo)
     "nsclc":      "cptac_lung",   # NSCLC subtype-> lung      (in repo)
     "glioma":     "cptac_gbm",    # glioma       -> GBM       (in repo)
@@ -243,9 +244,10 @@ def build_task_cohort(task, demo, mol, fold_col_arg, label_col_arg=None, log=pri
     label_of, fold_of = {}, {}
 
     # (label_source, label_col, default_fold_col, cohort_rule)
-    if task in ("brca_tp53", "ucec_tp53"):
+    if task in ("brca_tp53", "ucec_tp53", "coad_tp53"):
         fold_col = fold_col_arg or ("fold_tp53_brca" if task == "brca_tp53"
-                                    else "fold_tp53_ucec")
+                                    else "fold_tp53_ucec" if task == "ucec_tp53"
+                                    else "fold_tp53_coad")
         for bc, m in mol.items():
             if _clean(m.get(fold_col)) and _clean(m.get("tp53_status")):
                 label_of[bc] = int(float(m["tp53_status"]))
@@ -326,6 +328,17 @@ def sensitive_of(demo):
             "sex": fe.SEX_MAP.get(str(r.get("gender", "")).strip().lower()),
         }
     return out
+
+
+def permute_sensitive(sens, attr, seed):
+    """Randomly permute the ``attr`` values across barcodes (seeded).
+    Mutates ``sens`` in place. Returns None."""
+    bcs = list(sens.keys())
+    vals = [sens[bc][attr] for bc in bcs]
+    rng = np.random.RandomState(seed)
+    rng.shuffle(vals)
+    for bc, v in zip(bcs, vals):
+        sens[bc][attr] = v
 
 
 # ============================================================== tile collection
@@ -969,7 +982,7 @@ def main():
     ap.add_argument("--checkpoint", default=None,
                     help="DinoV2ViT .pt (omit/missing -> random backbone, proves plumbing)")
     ap.add_argument("--task", required=True,
-                    choices=["brca_tp53", "brca", "lihc_grade", "ucec_tp53",
+                    choices=["brca_tp53", "brca", "lihc_grade", "ucec_tp53", "coad_tp53",
                              "nsclc", "glioma", "cptac_nsclc", "dcis_duke",
                              "cptac_gbm"])
     ap.add_argument("--sensitive", required=True, choices=["race", "sex", "both"])
@@ -1060,6 +1073,14 @@ def main():
                          "with task-label equality so positives are "
                          "'different-demographic AND same-task-class' "
                          "(equalized-odds-aligned). No effect for dann/fino/pcgrad.")
+    ap.add_argument("--permute-sensitive", action="store_true",
+                    help="Randomly permute the sensitive-attribute values across "
+                         "patients (seeded by --permute-seed) before head training. "
+                         "The demographic signal becomes pure noise, so any "
+                         "AUROC/AUPRC degradation reveals the debiasing mechanism "
+                         "taxing performance under placebo.")
+    ap.add_argument("--permute-seed", type=int, default=1234,
+                    help="Random seed for --permute-sensitive permutation (default 1234).")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -1109,6 +1130,12 @@ def main():
             args.task, demo, mol, args.fold_col, args.label_col, log)
         sens = sensitive_of(demo)
         _DEMO_MAP = demo
+    # Permute sensitive labels (placebo test) ----------------------------
+    if args.permute_sensitive:
+        permute_sensitive(sens, args.sensitive, args.permute_seed)
+        log(f"[debias] PERMUTED {args.sensitive} labels across patients "
+            f"(seed={args.permute_seed}) -- placebo specificity test")
+
     log(f"[debias] cohort={len(cohort)} patients; folds present for "
         f"{len(fold_of)}; eval_fold={args.eval_fold}")
 
