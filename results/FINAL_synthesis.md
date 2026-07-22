@@ -41,10 +41,15 @@ DerSimonian–Laird random-effects meta (k=3, **real paired-bootstrap variances*
 
 Re-run with the protected attribute permuted, so there is no real bias to remove: a well-behaved debiaser should leave performance flat.
 
-- **Post-hoc placebo:** essentially flat, ±0.003–0.008 AUROC — no degradation.
-- **Bake-in placebo:** +0.04–0.06 AUROC (no degradation). This is an *improbably large improvement* on shuffled labels and should be flagged for a sanity check rather than read as a genuine gain.
+Benchmarked against the correct apples-to-apples baseline — panel-plain FM on the identical 334-patient racepanel target, **AUROC 0.8096**:
 
-Conclusion: neither stage taxes performance when there is no bias present.
+- **Post-hoc placebo** (debias vs shuffled demographics): essentially flat / inert, ±0.003–0.008 AUROC vs its baseline — no degradation.
+- **Bake-in placebo, MARGINAL:** AUROC 0.807 = **−0.002** vs the correct baseline (inert).
+- **Bake-in placebo, CANCER-CONDITIONAL:** AUROC 0.789 = **−0.021** vs the correct baseline (mild degradation).
+
+The earlier "+0.04–0.06 improvement (flagged for sanity check)" was a **comparator artifact, now resolved**: it came from benchmarking against the wrong Phase-1 baseline (AUROC 0.746 — a different FM and fold pool), not a genuine gain.
+
+Conclusion: neither stage strongly taxes performance when there is no bias present. If anything, the cancer-conditional bake-in is the mildly-more-destructive one — so the "post-hoc is destructive → pretraining is better" hypothesis is NOT supported.
 
 ## 5. Overall conclusion (honest headline)
 
@@ -56,7 +61,7 @@ The decisive factor is **conditioning the debiasing objective on the outcome lab
 - Baseline-EO gate is lenient by construction (EO is a non-negative max-of-|disparities|, CI bounded ≥0).
 - UCEC's baseline gap is TPR-driven (a sensitivity gap), not the FPR over-flagging seen in BRCA/COAD.
 - No external (non-TCGA) replication.
-- Phase-3 bake-in placebo improvement magnitude is unverified and needs a sanity check.
+- Phase-3 placebo is benchmarked against the correct panel-plain baseline (AUROC 0.8096); the prior "+0.06 improvement" was a comparator artifact (wrong Phase-1 baseline) and is resolved.
 - Within-fold residual site confound: whole-center holdout still shares within-hospital batch characteristics.
 
 ## 7. Artifacts
