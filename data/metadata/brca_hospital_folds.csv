@@ -1,0 +1,1062 @@
+patient_barcode,tss,race,tp53_status,fold
+TCGA-3C-AALI,3C,black or african american,1.0,source
+TCGA-3C-AALJ,3C,black or african american,0.0,source
+TCGA-3C-AALK,3C,black or african american,0.0,source
+TCGA-4H-AAAK,4H,white,0.0,source
+TCGA-5L-AAT0,5L,white,0.0,source
+TCGA-5L-AAT1,5L,white,0.0,source
+TCGA-5T-A9QA,5T,black or african american,0.0,source
+TCGA-A1-A0SB,A1,white,0.0,source
+TCGA-A1-A0SD,A1,white,0.0,source
+TCGA-A1-A0SE,A1,white,0.0,source
+TCGA-A1-A0SF,A1,white,0.0,source
+TCGA-A1-A0SH,A1,white,0.0,source
+TCGA-A1-A0SI,A1,white,1.0,source
+TCGA-A1-A0SJ,A1,black or african american,0.0,source
+TCGA-A1-A0SK,A1,asian,1.0,source
+TCGA-A1-A0SM,A1,white,0.0,source
+TCGA-A1-A0SN,A1,white,0.0,source
+TCGA-A1-A0SP,A1,not reported,1.0,source
+TCGA-A1-A0SQ,A1,white,0.0,source
+TCGA-A2-A04N,A2,white,0.0,F1
+TCGA-A2-A04P,A2,black or african american,1.0,F1
+TCGA-A2-A04Q,A2,white,0.0,F1
+TCGA-A2-A04R,A2,black or african american,0.0,F1
+TCGA-A2-A04T,A2,white,1.0,F1
+TCGA-A2-A04U,A2,white,1.0,F1
+TCGA-A2-A04V,A2,white,0.0,F1
+TCGA-A2-A04W,A2,white,1.0,F1
+TCGA-A2-A04X,A2,white,0.0,F1
+TCGA-A2-A04Y,A2,white,0.0,F1
+TCGA-A2-A0CK,A2,white,0.0,F1
+TCGA-A2-A0CL,A2,black or african american,1.0,F1
+TCGA-A2-A0CM,A2,black or african american,1.0,F1
+TCGA-A2-A0CO,A2,white,0.0,F1
+TCGA-A2-A0CP,A2,white,0.0,F1
+TCGA-A2-A0CQ,A2,black or african american,0.0,F1
+TCGA-A2-A0CR,A2,asian,0.0,F1
+TCGA-A2-A0CS,A2,white,0.0,F1
+TCGA-A2-A0CT,A2,white,0.0,F1
+TCGA-A2-A0CU,A2,white,0.0,F1
+TCGA-A2-A0CV,A2,asian,0.0,F1
+TCGA-A2-A0CW,A2,white,1.0,F1
+TCGA-A2-A0CX,A2,white,0.0,F1
+TCGA-A2-A0CY,A2,white,0.0,F1
+TCGA-A2-A0CZ,A2,white,0.0,F1
+TCGA-A2-A0D0,A2,black or african american,1.0,F1
+TCGA-A2-A0D3,A2,white,0.0,F1
+TCGA-A2-A0D4,A2,black or african american,0.0,F1
+TCGA-A2-A0EM,A2,white,0.0,F1
+TCGA-A2-A0EN,A2,white,0.0,F1
+TCGA-A2-A0EO,A2,white,0.0,F1
+TCGA-A2-A0EP,A2,white,0.0,F1
+TCGA-A2-A0EQ,A2,black or african american,1.0,F1
+TCGA-A2-A0ER,A2,white,0.0,F1
+TCGA-A2-A0ES,A2,white,0.0,F1
+TCGA-A2-A0ET,A2,white,0.0,F1
+TCGA-A2-A0EU,A2,white,0.0,F1
+TCGA-A2-A0EV,A2,white,0.0,F1
+TCGA-A2-A0EW,A2,white,0.0,F1
+TCGA-A2-A0EX,A2,white,0.0,F1
+TCGA-A2-A0EY,A2,white,1.0,F1
+TCGA-A2-A0ST,A2,white,0.0,F1
+TCGA-A2-A0SU,A2,white,0.0,F1
+TCGA-A2-A0SV,A2,white,1.0,F1
+TCGA-A2-A0SW,A2,white,1.0,F1
+TCGA-A2-A0SX,A2,white,1.0,F1
+TCGA-A2-A0SY,A2,white,0.0,F1
+TCGA-A2-A0T0,A2,white,0.0,F1
+TCGA-A2-A0T1,A2,american indian or alaska native,1.0,F1
+TCGA-A2-A0T2,A2,white,1.0,F1
+TCGA-A2-A0T3,A2,white,1.0,F1
+TCGA-A2-A0T4,A2,white,0.0,F1
+TCGA-A2-A0T5,A2,white,0.0,F1
+TCGA-A2-A0T6,A2,white,0.0,F1
+TCGA-A2-A0T7,A2,white,0.0,F1
+TCGA-A2-A0YC,A2,white,0.0,F1
+TCGA-A2-A0YD,A2,white,0.0,F1
+TCGA-A2-A0YE,A2,white,1.0,F1
+TCGA-A2-A0YF,A2,black or african american,0.0,F1
+TCGA-A2-A0YG,A2,white,1.0,F1
+TCGA-A2-A0YH,A2,white,1.0,F1
+TCGA-A2-A0YI,A2,white,0.0,F1
+TCGA-A2-A0YJ,A2,white,1.0,F1
+TCGA-A2-A0YK,A2,white,0.0,F1
+TCGA-A2-A0YL,A2,white,0.0,F1
+TCGA-A2-A0YM,A2,white,1.0,F1
+TCGA-A2-A0YT,A2,white,1.0,F1
+TCGA-A2-A1FV,A2,white,0.0,F1
+TCGA-A2-A1FW,A2,white,0.0,F1
+TCGA-A2-A1FX,A2,white,0.0,F1
+TCGA-A2-A1FZ,A2,white,0.0,F1
+TCGA-A2-A1G0,A2,white,0.0,F1
+TCGA-A2-A1G1,A2,white,1.0,F1
+TCGA-A2-A1G4,A2,white,0.0,F1
+TCGA-A2-A1G6,A2,white,0.0,F1
+TCGA-A2-A259,A2,black or african american,0.0,F1
+TCGA-A2-A25A,A2,white,0.0,F1
+TCGA-A2-A25B,A2,black or african american,0.0,F1
+TCGA-A2-A25C,A2,white,0.0,F1
+TCGA-A2-A25D,A2,white,0.0,F1
+TCGA-A2-A25E,A2,black or african american,0.0,F1
+TCGA-A2-A25F,A2,white,0.0,F1
+TCGA-A2-A3KC,A2,black or african american,0.0,F1
+TCGA-A2-A3KD,A2,white,0.0,F1
+TCGA-A2-A3XS,A2,black or african american,0.0,F1
+TCGA-A2-A3XT,A2,black or african american,0.0,F1
+TCGA-A2-A3XU,A2,black or african american,0.0,F1
+TCGA-A2-A3XV,A2,black or african american,0.0,F1
+TCGA-A2-A3XW,A2,black or african american,0.0,F1
+TCGA-A2-A3XX,A2,black or african american,0.0,F1
+TCGA-A2-A3XY,A2,black or african american,0.0,F1
+TCGA-A2-A3XZ,A2,black or african american,0.0,F1
+TCGA-A2-A3Y0,A2,black or african american,1.0,F1
+TCGA-A2-A4RW,A2,white,0.0,F1
+TCGA-A2-A4RX,A2,black or african american,0.0,F1
+TCGA-A2-A4RY,A2,white,0.0,F1
+TCGA-A2-A4S0,A2,white,0.0,F1
+TCGA-A2-A4S1,A2,white,1.0,F1
+TCGA-A2-A4S2,A2,white,0.0,F1
+TCGA-A2-A4S3,A2,black or african american,1.0,F1
+TCGA-A7-A0CD,A7,white,0.0,F2
+TCGA-A7-A0CE,A7,white,1.0,F2
+TCGA-A7-A0CG,A7,white,0.0,F2
+TCGA-A7-A0CH,A7,white,0.0,F2
+TCGA-A7-A0CJ,A7,white,1.0,F2
+TCGA-A7-A0D9,A7,white,0.0,F2
+TCGA-A7-A0DA,A7,white,1.0,F2
+TCGA-A7-A0DB,A7,white,0.0,F2
+TCGA-A7-A0DC,A7,white,0.0,F2
+TCGA-A7-A13D,A7,black or african american,1.0,F2
+TCGA-A7-A13E,A7,white,0.0,F2
+TCGA-A7-A13F,A7,white,0.0,F2
+TCGA-A7-A13G,A7,white,0.0,F2
+TCGA-A7-A13H,A7,white,0.0,F2
+TCGA-A7-A26E,A7,white,0.0,F2
+TCGA-A7-A26F,A7,white,1.0,F2
+TCGA-A7-A26G,A7,black or african american,1.0,F2
+TCGA-A7-A26H,A7,white,0.0,F2
+TCGA-A7-A26I,A7,white,1.0,F2
+TCGA-A7-A26J,A7,white,0.0,F2
+TCGA-A7-A2KD,A7,black or african american,0.0,F2
+TCGA-A7-A3IY,A7,white,0.0,F2
+TCGA-A7-A3IZ,A7,white,0.0,F2
+TCGA-A7-A3J0,A7,white,0.0,F2
+TCGA-A7-A3J1,A7,white,0.0,F2
+TCGA-A7-A3RF,A7,white,0.0,F2
+TCGA-A7-A425,A7,white,0.0,F2
+TCGA-A7-A426,A7,white,0.0,F2
+TCGA-A7-A4SA,A7,white,0.0,F2
+TCGA-A7-A4SB,A7,white,0.0,F2
+TCGA-A7-A4SC,A7,white,0.0,F2
+TCGA-A7-A4SD,A7,black or african american,0.0,F2
+TCGA-A7-A4SE,A7,black or african american,1.0,F2
+TCGA-A7-A4SF,A7,black or african american,0.0,F2
+TCGA-A7-A56D,A7,black or african american,1.0,F2
+TCGA-A7-A5ZV,A7,black or african american,1.0,F2
+TCGA-A7-A5ZW,A7,black or african american,0.0,F2
+TCGA-A7-A5ZX,A7,white,0.0,F2
+TCGA-A7-A6VV,A7,black or african american,1.0,F2
+TCGA-A7-A6VW,A7,black or african american,1.0,F2
+TCGA-A7-A6VX,A7,black or african american,1.0,F2
+TCGA-A7-A6VY,A7,black or african american,1.0,F2
+TCGA-A8-A06N,A8,not reported,0.0,source
+TCGA-A8-A06O,A8,not reported,1.0,source
+TCGA-A8-A06P,A8,not reported,0.0,source
+TCGA-A8-A06Q,A8,not reported,1.0,source
+TCGA-A8-A06R,A8,not reported,0.0,source
+TCGA-A8-A06T,A8,not reported,0.0,source
+TCGA-A8-A06U,A8,not reported,1.0,source
+TCGA-A8-A06X,A8,not reported,0.0,source
+TCGA-A8-A06Y,A8,not reported,0.0,source
+TCGA-A8-A06Z,A8,not reported,1.0,source
+TCGA-A8-A075,A8,not reported,1.0,source
+TCGA-A8-A076,A8,not reported,0.0,source
+TCGA-A8-A079,A8,not reported,1.0,source
+TCGA-A8-A07B,A8,not reported,1.0,source
+TCGA-A8-A07C,A8,not reported,0.0,source
+TCGA-A8-A07E,A8,not reported,0.0,source
+TCGA-A8-A07F,A8,not reported,0.0,source
+TCGA-A8-A07G,A8,not reported,0.0,source
+TCGA-A8-A07I,A8,not reported,0.0,source
+TCGA-A8-A07J,A8,not reported,0.0,source
+TCGA-A8-A07L,A8,not reported,0.0,source
+TCGA-A8-A07O,A8,not reported,1.0,source
+TCGA-A8-A07P,A8,not reported,0.0,source
+TCGA-A8-A07R,A8,not reported,1.0,source
+TCGA-A8-A07S,A8,not reported,0.0,source
+TCGA-A8-A07U,A8,not reported,1.0,source
+TCGA-A8-A07W,A8,not reported,1.0,source
+TCGA-A8-A07Z,A8,not reported,0.0,source
+TCGA-A8-A081,A8,not reported,1.0,source
+TCGA-A8-A082,A8,not reported,0.0,source
+TCGA-A8-A083,A8,not reported,0.0,source
+TCGA-A8-A084,A8,not reported,0.0,source
+TCGA-A8-A085,A8,not reported,0.0,source
+TCGA-A8-A086,A8,not reported,0.0,source
+TCGA-A8-A08A,A8,not reported,0.0,source
+TCGA-A8-A08B,A8,not reported,0.0,source
+TCGA-A8-A08C,A8,not reported,0.0,source
+TCGA-A8-A08F,A8,not reported,0.0,source
+TCGA-A8-A08G,A8,not reported,0.0,source
+TCGA-A8-A08H,A8,not reported,0.0,source
+TCGA-A8-A08I,A8,not reported,0.0,source
+TCGA-A8-A08J,A8,not reported,0.0,source
+TCGA-A8-A08L,A8,not reported,0.0,source
+TCGA-A8-A08O,A8,not reported,0.0,source
+TCGA-A8-A08P,A8,not reported,1.0,source
+TCGA-A8-A08R,A8,not reported,1.0,source
+TCGA-A8-A08S,A8,not reported,0.0,source
+TCGA-A8-A08T,A8,not reported,0.0,source
+TCGA-A8-A08X,A8,not reported,1.0,source
+TCGA-A8-A08Z,A8,not reported,0.0,source
+TCGA-A8-A090,A8,not reported,0.0,source
+TCGA-A8-A091,A8,not reported,0.0,source
+TCGA-A8-A092,A8,not reported,1.0,source
+TCGA-A8-A093,A8,not reported,0.0,source
+TCGA-A8-A094,A8,not reported,1.0,source
+TCGA-A8-A095,A8,not reported,0.0,source
+TCGA-A8-A096,A8,not reported,0.0,source
+TCGA-A8-A097,A8,not reported,1.0,source
+TCGA-A8-A099,A8,not reported,0.0,source
+TCGA-A8-A09A,A8,not reported,0.0,source
+TCGA-A8-A09B,A8,not reported,0.0,source
+TCGA-A8-A09C,A8,not reported,0.0,source
+TCGA-A8-A09D,A8,not reported,0.0,source
+TCGA-A8-A09E,A8,not reported,0.0,source
+TCGA-A8-A09G,A8,not reported,0.0,source
+TCGA-A8-A09I,A8,not reported,0.0,source
+TCGA-A8-A09K,A8,not reported,0.0,source
+TCGA-A8-A09M,A8,not reported,0.0,source
+TCGA-A8-A09N,A8,not reported,1.0,source
+TCGA-A8-A09Q,A8,not reported,1.0,source
+TCGA-A8-A09R,A8,not reported,0.0,source
+TCGA-A8-A09T,A8,not reported,0.0,source
+TCGA-A8-A09V,A8,not reported,0.0,source
+TCGA-A8-A09W,A8,not reported,0.0,source
+TCGA-A8-A09X,A8,not reported,1.0,source
+TCGA-A8-A09Z,A8,not reported,0.0,source
+TCGA-A8-A0A1,A8,not reported,0.0,source
+TCGA-A8-A0A2,A8,not reported,0.0,source
+TCGA-A8-A0A4,A8,not reported,0.0,source
+TCGA-A8-A0A7,A8,not reported,0.0,source
+TCGA-A8-A0A9,A8,not reported,0.0,source
+TCGA-A8-A0AB,A8,not reported,0.0,source
+TCGA-A8-A0AD,A8,not reported,0.0,source
+TCGA-AC-A23C,AC,white,1.0,F1
+TCGA-AC-A23E,AC,white,0.0,F1
+TCGA-AC-A23G,AC,white,0.0,F1
+TCGA-AC-A23H,AC,white,0.0,F1
+TCGA-AC-A2B8,AC,white,0.0,F1
+TCGA-AC-A2BK,AC,black or african american,1.0,F1
+TCGA-AC-A2BM,AC,black or african american,0.0,F1
+TCGA-AC-A2FB,AC,white,0.0,F1
+TCGA-AC-A2FE,AC,white,0.0,F1
+TCGA-AC-A2FF,AC,asian,0.0,F1
+TCGA-AC-A2FG,AC,white,0.0,F1
+TCGA-AC-A2FK,AC,white,0.0,F1
+TCGA-AC-A2FM,AC,white,0.0,F1
+TCGA-AC-A2FO,AC,white,0.0,F1
+TCGA-AC-A2QH,AC,white,1.0,F1
+TCGA-AC-A2QI,AC,white,0.0,F1
+TCGA-AC-A2QJ,AC,white,0.0,F1
+TCGA-AC-A3BB,AC,black or african american,0.0,F1
+TCGA-AC-A3EH,AC,white,0.0,F1
+TCGA-AC-A3HN,AC,white,0.0,F1
+TCGA-AC-A3OD,AC,white,1.0,F1
+TCGA-AC-A3QP,AC,white,0.0,F1
+TCGA-AC-A3QQ,AC,white,0.0,F1
+TCGA-AC-A3TM,AC,white,0.0,F1
+TCGA-AC-A3TN,AC,white,0.0,F1
+TCGA-AC-A3W5,AC,black or african american,0.0,F1
+TCGA-AC-A3W6,AC,white,0.0,F1
+TCGA-AC-A3W7,AC,white,0.0,F1
+TCGA-AC-A3YI,AC,white,0.0,F1
+TCGA-AC-A3YJ,AC,white,0.0,F1
+TCGA-AC-A4ZE,AC,white,0.0,F1
+TCGA-AC-A5EH,AC,black or african american,1.0,F1
+TCGA-AC-A5EI,AC,white,0.0,F1
+TCGA-AC-A5XS,AC,white,0.0,F1
+TCGA-AC-A5XU,AC,black or african american,1.0,F1
+TCGA-AC-A62V,AC,black or african american,0.0,F1
+TCGA-AC-A62X,AC,black or african american,1.0,F1
+TCGA-AC-A62Y,AC,white,0.0,F1
+TCGA-AC-A6IV,AC,white,0.0,F1
+TCGA-AC-A6IW,AC,black or african american,1.0,F1
+TCGA-AC-A6IX,AC,white,0.0,F1
+TCGA-AC-A6NO,AC,black or african american,0.0,F1
+TCGA-AC-A7VB,AC,black or african american,0.0,F1
+TCGA-AC-A7VC,AC,white,1.0,F1
+TCGA-AC-A8OP,AC,black or african american,0.0,F1
+TCGA-AC-A8OQ,AC,black or african american,1.0,F1
+TCGA-AC-A8OR,AC,white,0.0,F1
+TCGA-AC-A8OS,AC,white,0.0,F1
+TCGA-AN-A03Y,AN,white,0.0,source
+TCGA-AN-A041,AN,white,0.0,source
+TCGA-AN-A046,AN,white,1.0,source
+TCGA-AN-A0AJ,AN,white,1.0,source
+TCGA-AN-A0AK,AN,white,0.0,source
+TCGA-AN-A0AL,AN,white,1.0,source
+TCGA-AN-A0AM,AN,white,0.0,source
+TCGA-AN-A0AR,AN,white,1.0,source
+TCGA-AN-A0AS,AN,white,1.0,source
+TCGA-AN-A0AT,AN,white,0.0,source
+TCGA-AN-A0FD,AN,white,0.0,source
+TCGA-AN-A0FF,AN,white,0.0,source
+TCGA-AN-A0FJ,AN,white,1.0,source
+TCGA-AN-A0FK,AN,white,0.0,source
+TCGA-AN-A0FL,AN,white,1.0,source
+TCGA-AN-A0FN,AN,white,0.0,source
+TCGA-AN-A0FS,AN,white,0.0,source
+TCGA-AN-A0FT,AN,white,1.0,source
+TCGA-AN-A0FV,AN,white,1.0,source
+TCGA-AN-A0FW,AN,white,0.0,source
+TCGA-AN-A0FX,AN,white,1.0,source
+TCGA-AN-A0FY,AN,white,1.0,source
+TCGA-AN-A0FZ,AN,white,0.0,source
+TCGA-AN-A0G0,AN,white,1.0,source
+TCGA-AN-A0XL,AN,white,0.0,source
+TCGA-AN-A0XN,AN,white,1.0,source
+TCGA-AN-A0XO,AN,white,0.0,source
+TCGA-AN-A0XP,AN,white,0.0,source
+TCGA-AN-A0XS,AN,white,0.0,source
+TCGA-AN-A0XT,AN,white,1.0,source
+TCGA-AN-A0XU,AN,white,1.0,source
+TCGA-AN-A0XW,AN,white,0.0,source
+TCGA-AO-A03L,AO,asian,1.0,source
+TCGA-AO-A03M,AO,white,0.0,source
+TCGA-AO-A03N,AO,white,0.0,source
+TCGA-AO-A03O,AO,black or african american,1.0,source
+TCGA-AO-A03P,AO,black or african american,0.0,source
+TCGA-AO-A03R,AO,white,1.0,source
+TCGA-AO-A03T,AO,white,0.0,source
+TCGA-AO-A03U,AO,white,0.0,source
+TCGA-AO-A03V,AO,white,1.0,source
+TCGA-AO-A0J2,AO,white,1.0,source
+TCGA-AO-A0J3,AO,white,0.0,source
+TCGA-AO-A0J4,AO,black or african american,1.0,source
+TCGA-AO-A0J5,AO,white,0.0,source
+TCGA-AO-A0J6,AO,white,1.0,source
+TCGA-AO-A0J7,AO,white,0.0,source
+TCGA-AO-A0J8,AO,white,0.0,source
+TCGA-AO-A0J9,AO,white,0.0,source
+TCGA-AO-A0JA,AO,black or african american,0.0,source
+TCGA-AO-A0JB,AO,white,1.0,source
+TCGA-AO-A0JC,AO,white,0.0,source
+TCGA-AO-A0JD,AO,white,1.0,source
+TCGA-AO-A0JE,AO,black or african american,1.0,source
+TCGA-AO-A0JG,AO,white,0.0,source
+TCGA-AO-A0JI,AO,white,0.0,source
+TCGA-AO-A0JJ,AO,white,0.0,source
+TCGA-AO-A0JL,AO,white,0.0,source
+TCGA-AO-A0JM,AO,not reported,0.0,source
+TCGA-AO-A124,AO,white,1.0,source
+TCGA-AO-A125,AO,black or african american,0.0,source
+TCGA-AO-A126,AO,asian,0.0,source
+TCGA-AO-A128,AO,white,1.0,source
+TCGA-AO-A129,AO,white,0.0,source
+TCGA-AO-A12A,AO,white,0.0,source
+TCGA-AO-A12B,AO,white,0.0,source
+TCGA-AO-A12C,AO,white,0.0,source
+TCGA-AO-A12D,AO,white,1.0,source
+TCGA-AO-A12E,AO,white,0.0,source
+TCGA-AO-A12F,AO,white,0.0,source
+TCGA-AO-A12G,AO,white,0.0,source
+TCGA-AO-A12H,AO,black or african american,0.0,source
+TCGA-AO-A1KO,AO,white,0.0,source
+TCGA-AO-A1KP,AO,white,0.0,source
+TCGA-AO-A1KQ,AO,white,0.0,source
+TCGA-AO-A1KR,AO,white,0.0,source
+TCGA-AO-A1KS,AO,white,0.0,source
+TCGA-AO-A1KT,AO,white,0.0,source
+TCGA-AQ-A04H,AQ,white,1.0,source
+TCGA-AQ-A04J,AQ,white,1.0,source
+TCGA-AQ-A04L,AQ,white,0.0,source
+TCGA-AQ-A0Y5,AQ,white,0.0,source
+TCGA-AQ-A54N,AQ,black or african american,1.0,source
+TCGA-AQ-A54O,AQ,black or african american,0.0,source
+TCGA-AQ-A7U7,AQ,white,0.0,source
+TCGA-AR-A0TP,AR,white,1.0,source
+TCGA-AR-A0TQ,AR,white,0.0,source
+TCGA-AR-A0TR,AR,white,0.0,source
+TCGA-AR-A0TS,AR,white,1.0,source
+TCGA-AR-A0TT,AR,black or african american,0.0,source
+TCGA-AR-A0TU,AR,not reported,0.0,source
+TCGA-AR-A0TV,AR,not reported,1.0,source
+TCGA-AR-A0TW,AR,white,0.0,source
+TCGA-AR-A0TX,AR,not reported,1.0,source
+TCGA-AR-A0TY,AR,white,0.0,source
+TCGA-AR-A0TZ,AR,white,0.0,source
+TCGA-AR-A0U0,AR,white,1.0,source
+TCGA-AR-A0U1,AR,white,1.0,source
+TCGA-AR-A0U2,AR,white,1.0,source
+TCGA-AR-A0U3,AR,white,1.0,source
+TCGA-AR-A0U4,AR,white,0.0,source
+TCGA-AR-A1AH,AR,white,1.0,source
+TCGA-AR-A1AI,AR,white,1.0,source
+TCGA-AR-A1AJ,AR,white,1.0,source
+TCGA-AR-A1AK,AR,white,0.0,source
+TCGA-AR-A1AL,AR,white,0.0,source
+TCGA-AR-A1AM,AR,white,0.0,source
+TCGA-AR-A1AN,AR,white,1.0,source
+TCGA-AR-A1AO,AR,white,0.0,source
+TCGA-AR-A1AP,AR,white,1.0,source
+TCGA-AR-A1AQ,AR,white,1.0,source
+TCGA-AR-A1AR,AR,white,1.0,source
+TCGA-AR-A1AS,AR,asian,1.0,source
+TCGA-AR-A1AT,AR,white,0.0,source
+TCGA-AR-A1AU,AR,white,0.0,source
+TCGA-AR-A1AV,AR,white,0.0,source
+TCGA-AR-A1AW,AR,white,1.0,source
+TCGA-AR-A1AX,AR,white,0.0,source
+TCGA-AR-A1AY,AR,white,0.0,source
+TCGA-AR-A24H,AR,white,0.0,source
+TCGA-AR-A24K,AR,white,1.0,source
+TCGA-AR-A24L,AR,white,0.0,source
+TCGA-AR-A24M,AR,white,0.0,source
+TCGA-AR-A24N,AR,white,0.0,source
+TCGA-AR-A24O,AR,white,0.0,source
+TCGA-AR-A24P,AR,white,1.0,source
+TCGA-AR-A24Q,AR,white,1.0,source
+TCGA-AR-A24R,AR,white,0.0,source
+TCGA-AR-A24S,AR,white,1.0,source
+TCGA-AR-A24T,AR,white,1.0,source
+TCGA-AR-A24U,AR,white,1.0,source
+TCGA-AR-A24V,AR,white,0.0,source
+TCGA-AR-A24W,AR,white,0.0,source
+TCGA-AR-A24X,AR,white,0.0,source
+TCGA-AR-A24Z,AR,white,0.0,source
+TCGA-AR-A250,AR,white,0.0,source
+TCGA-AR-A251,AR,white,1.0,source
+TCGA-AR-A252,AR,white,0.0,source
+TCGA-AR-A254,AR,white,1.0,source
+TCGA-AR-A255,AR,white,0.0,source
+TCGA-AR-A256,AR,white,1.0,source
+TCGA-AR-A2LE,AR,white,0.0,source
+TCGA-AR-A2LH,AR,white,1.0,source
+TCGA-AR-A2LJ,AR,white,0.0,source
+TCGA-AR-A2LK,AR,white,0.0,source
+TCGA-AR-A2LL,AR,white,0.0,source
+TCGA-AR-A2LM,AR,white,0.0,source
+TCGA-AR-A2LN,AR,white,0.0,source
+TCGA-AR-A2LO,AR,white,0.0,source
+TCGA-AR-A2LQ,AR,white,0.0,source
+TCGA-AR-A2LR,AR,white,1.0,source
+TCGA-AR-A5QM,AR,white,0.0,source
+TCGA-AR-A5QN,AR,white,0.0,source
+TCGA-AR-A5QP,AR,white,0.0,source
+TCGA-AR-A5QQ,AR,white,1.0,source
+TCGA-B6-A0I1,B6,black or african american,0.0,F2
+TCGA-B6-A0I2,B6,white,1.0,F2
+TCGA-B6-A0I5,B6,white,0.0,F2
+TCGA-B6-A0I6,B6,black or african american,1.0,F2
+TCGA-B6-A0I8,B6,white,0.0,F2
+TCGA-B6-A0I9,B6,white,1.0,F2
+TCGA-B6-A0IA,B6,white,0.0,F2
+TCGA-B6-A0IB,B6,white,0.0,F2
+TCGA-B6-A0IC,B6,white,0.0,F2
+TCGA-B6-A0IE,B6,black or african american,1.0,F2
+TCGA-B6-A0IG,B6,white,0.0,F2
+TCGA-B6-A0IH,B6,white,0.0,F2
+TCGA-B6-A0IJ,B6,black or african american,1.0,F2
+TCGA-B6-A0IK,B6,white,1.0,F2
+TCGA-B6-A0IM,B6,black or african american,0.0,F2
+TCGA-B6-A0IN,B6,white,0.0,F2
+TCGA-B6-A0IO,B6,white,0.0,F2
+TCGA-B6-A0IP,B6,white,0.0,F2
+TCGA-B6-A0IQ,B6,white,0.0,F2
+TCGA-B6-A0RE,B6,black or african american,1.0,F2
+TCGA-B6-A0RG,B6,white,0.0,F2
+TCGA-B6-A0RH,B6,black or african american,1.0,F2
+TCGA-B6-A0RI,B6,white,0.0,F2
+TCGA-B6-A0RL,B6,black or african american,0.0,F2
+TCGA-B6-A0RM,B6,black or african american,0.0,F2
+TCGA-B6-A0RN,B6,white,0.0,F2
+TCGA-B6-A0RO,B6,white,0.0,F2
+TCGA-B6-A0RP,B6,white,0.0,F2
+TCGA-B6-A0RQ,B6,white,0.0,F2
+TCGA-B6-A0RS,B6,white,1.0,F2
+TCGA-B6-A0RT,B6,white,1.0,F2
+TCGA-B6-A0RU,B6,white,1.0,F2
+TCGA-B6-A0RV,B6,white,0.0,F2
+TCGA-B6-A0WS,B6,black or african american,0.0,F2
+TCGA-B6-A0WT,B6,white,0.0,F2
+TCGA-B6-A0WV,B6,white,0.0,F2
+TCGA-B6-A0WW,B6,black or african american,0.0,F2
+TCGA-B6-A0WX,B6,black or african american,1.0,F2
+TCGA-B6-A0WY,B6,white,0.0,F2
+TCGA-B6-A0WZ,B6,black or african american,0.0,F2
+TCGA-B6-A0X0,B6,white,0.0,F2
+TCGA-B6-A0X1,B6,white,1.0,F2
+TCGA-B6-A0X4,B6,white,0.0,F2
+TCGA-B6-A0X5,B6,black or african american,0.0,F2
+TCGA-B6-A0X7,B6,white,0.0,F2
+TCGA-B6-A1KC,B6,white,0.0,F2
+TCGA-B6-A1KF,B6,white,1.0,F2
+TCGA-B6-A1KI,B6,white,0.0,F2
+TCGA-B6-A1KN,B6,white,1.0,F2
+TCGA-B6-A2IU,B6,white,0.0,F2
+TCGA-BH-A0AU,BH,white,0.0,source
+TCGA-BH-A0AV,BH,black or african american,1.0,source
+TCGA-BH-A0AW,BH,white,1.0,source
+TCGA-BH-A0AY,BH,white,0.0,source
+TCGA-BH-A0AZ,BH,white,0.0,source
+TCGA-BH-A0B0,BH,black or african american,1.0,source
+TCGA-BH-A0B1,BH,white,0.0,source
+TCGA-BH-A0B3,BH,white,1.0,source
+TCGA-BH-A0B4,BH,white,0.0,source
+TCGA-BH-A0B5,BH,white,0.0,source
+TCGA-BH-A0B6,BH,white,0.0,source
+TCGA-BH-A0B7,BH,white,1.0,source
+TCGA-BH-A0B8,BH,white,0.0,source
+TCGA-BH-A0B9,BH,white,1.0,source
+TCGA-BH-A0BA,BH,white,0.0,source
+TCGA-BH-A0BC,BH,white,1.0,source
+TCGA-BH-A0BD,BH,white,0.0,source
+TCGA-BH-A0BF,BH,white,1.0,source
+TCGA-BH-A0BG,BH,white,0.0,source
+TCGA-BH-A0BJ,BH,white,0.0,source
+TCGA-BH-A0BL,BH,white,1.0,source
+TCGA-BH-A0BM,BH,white,0.0,source
+TCGA-BH-A0BO,BH,white,0.0,source
+TCGA-BH-A0BP,BH,white,1.0,source
+TCGA-BH-A0BQ,BH,white,0.0,source
+TCGA-BH-A0BR,BH,white,1.0,source
+TCGA-BH-A0BS,BH,white,0.0,source
+TCGA-BH-A0BT,BH,white,1.0,source
+TCGA-BH-A0BV,BH,white,0.0,source
+TCGA-BH-A0BW,BH,black or african american,1.0,source
+TCGA-BH-A0BZ,BH,white,0.0,source
+TCGA-BH-A0C0,BH,white,1.0,source
+TCGA-BH-A0C1,BH,white,0.0,source
+TCGA-BH-A0C3,BH,white,1.0,source
+TCGA-BH-A0C7,BH,white,0.0,source
+TCGA-BH-A0DD,BH,white,0.0,source
+TCGA-BH-A0DE,BH,white,0.0,source
+TCGA-BH-A0DG,BH,black or african american,0.0,source
+TCGA-BH-A0DH,BH,white,0.0,source
+TCGA-BH-A0DI,BH,white,1.0,source
+TCGA-BH-A0DK,BH,white,0.0,source
+TCGA-BH-A0DL,BH,white,1.0,source
+TCGA-BH-A0DO,BH,white,0.0,source
+TCGA-BH-A0DP,BH,white,0.0,source
+TCGA-BH-A0DQ,BH,white,0.0,source
+TCGA-BH-A0DS,BH,white,0.0,source
+TCGA-BH-A0DT,BH,white,0.0,source
+TCGA-BH-A0DV,BH,white,0.0,source
+TCGA-BH-A0DX,BH,white,0.0,source
+TCGA-BH-A0DZ,BH,white,1.0,source
+TCGA-BH-A0E0,BH,white,1.0,source
+TCGA-BH-A0E1,BH,white,0.0,source
+TCGA-BH-A0E2,BH,black or african american,0.0,source
+TCGA-BH-A0E6,BH,white,0.0,source
+TCGA-BH-A0E7,BH,white,0.0,source
+TCGA-BH-A0E9,BH,white,0.0,source
+TCGA-BH-A0EA,BH,white,0.0,source
+TCGA-BH-A0EB,BH,white,0.0,source
+TCGA-BH-A0EE,BH,white,1.0,source
+TCGA-BH-A0EI,BH,white,0.0,source
+TCGA-BH-A0GY,BH,white,1.0,source
+TCGA-BH-A0GZ,BH,white,0.0,source
+TCGA-BH-A0H0,BH,white,0.0,source
+TCGA-BH-A0H3,BH,white,0.0,source
+TCGA-BH-A0H5,BH,white,0.0,source
+TCGA-BH-A0H6,BH,white,0.0,source
+TCGA-BH-A0H7,BH,white,1.0,source
+TCGA-BH-A0H9,BH,white,0.0,source
+TCGA-BH-A0HA,BH,white,0.0,source
+TCGA-BH-A0HB,BH,white,0.0,source
+TCGA-BH-A0HF,BH,white,0.0,source
+TCGA-BH-A0HI,BH,white,0.0,source
+TCGA-BH-A0HK,BH,white,0.0,source
+TCGA-BH-A0HL,BH,white,0.0,source
+TCGA-BH-A0HN,BH,white,0.0,source
+TCGA-BH-A0HO,BH,white,0.0,source
+TCGA-BH-A0HP,BH,white,0.0,source
+TCGA-BH-A0HQ,BH,white,0.0,source
+TCGA-BH-A0HU,BH,white,0.0,source
+TCGA-BH-A0HW,BH,asian,0.0,source
+TCGA-BH-A0HX,BH,white,1.0,source
+TCGA-BH-A0HY,BH,white,1.0,source
+TCGA-BH-A0RX,BH,white,1.0,source
+TCGA-BH-A0W3,BH,white,0.0,source
+TCGA-BH-A0W4,BH,white,0.0,source
+TCGA-BH-A0W5,BH,white,0.0,source
+TCGA-BH-A0W7,BH,white,0.0,source
+TCGA-BH-A0WA,BH,white,1.0,source
+TCGA-BH-A18F,BH,white,0.0,source
+TCGA-BH-A18G,BH,white,0.0,source
+TCGA-BH-A18H,BH,white,1.0,source
+TCGA-BH-A18I,BH,white,0.0,source
+TCGA-BH-A18J,BH,white,0.0,source
+TCGA-BH-A18L,BH,white,0.0,source
+TCGA-BH-A18M,BH,white,0.0,source
+TCGA-BH-A18N,BH,white,0.0,source
+TCGA-BH-A18P,BH,white,0.0,source
+TCGA-BH-A18Q,BH,white,1.0,source
+TCGA-BH-A18R,BH,white,0.0,source
+TCGA-BH-A18S,BH,white,0.0,source
+TCGA-BH-A18T,BH,white,1.0,source
+TCGA-BH-A18U,BH,white,1.0,source
+TCGA-BH-A18V,BH,white,1.0,source
+TCGA-BH-A1EN,BH,white,0.0,source
+TCGA-BH-A1EO,BH,white,0.0,source
+TCGA-BH-A1ES,BH,white,0.0,source
+TCGA-BH-A1ET,BH,white,0.0,source
+TCGA-BH-A1EU,BH,white,0.0,source
+TCGA-BH-A1EV,BH,white,0.0,source
+TCGA-BH-A1EW,BH,white,0.0,source
+TCGA-BH-A1EX,BH,white,0.0,source
+TCGA-BH-A1EY,BH,white,1.0,source
+TCGA-BH-A1F0,BH,white,1.0,source
+TCGA-BH-A1F2,BH,white,1.0,source
+TCGA-BH-A1F5,BH,white,0.0,source
+TCGA-BH-A1F6,BH,white,1.0,source
+TCGA-BH-A1F8,BH,white,0.0,source
+TCGA-BH-A1FB,BH,white,0.0,source
+TCGA-BH-A1FC,BH,black or african american,1.0,source
+TCGA-BH-A1FE,BH,white,1.0,source
+TCGA-BH-A1FG,BH,white,0.0,source
+TCGA-BH-A1FH,BH,white,0.0,source
+TCGA-BH-A1FJ,BH,white,0.0,source
+TCGA-BH-A1FL,BH,white,0.0,source
+TCGA-BH-A1FM,BH,white,0.0,source
+TCGA-BH-A1FN,BH,white,1.0,source
+TCGA-BH-A1FR,BH,white,0.0,source
+TCGA-BH-A1FU,BH,white,1.0,source
+TCGA-BH-A201,BH,white,0.0,source
+TCGA-BH-A202,BH,white,1.0,source
+TCGA-BH-A203,BH,white,1.0,source
+TCGA-BH-A204,BH,white,0.0,source
+TCGA-BH-A208,BH,white,1.0,source
+TCGA-BH-A209,BH,black or african american,0.0,source
+TCGA-BH-A28O,BH,white,0.0,source
+TCGA-BH-A28Q,BH,white,0.0,source
+TCGA-BH-A2L8,BH,white,0.0,source
+TCGA-BH-A42T,BH,black or african american,0.0,source
+TCGA-BH-A42U,BH,black or african american,0.0,source
+TCGA-BH-A42V,BH,black or african american,0.0,source
+TCGA-BH-A5IZ,BH,black or african american,1.0,source
+TCGA-BH-A5J0,BH,black or african american,0.0,source
+TCGA-C8-A12K,C8,asian,1.0,source
+TCGA-C8-A12L,C8,asian,1.0,source
+TCGA-C8-A12M,C8,asian,0.0,source
+TCGA-C8-A12N,C8,asian,0.0,source
+TCGA-C8-A12O,C8,asian,1.0,source
+TCGA-C8-A12P,C8,asian,1.0,source
+TCGA-C8-A12Q,C8,asian,1.0,source
+TCGA-C8-A12T,C8,asian,0.0,source
+TCGA-C8-A12U,C8,asian,0.0,source
+TCGA-C8-A12V,C8,asian,0.0,source
+TCGA-C8-A12W,C8,asian,1.0,source
+TCGA-C8-A12X,C8,asian,0.0,source
+TCGA-C8-A12Y,C8,asian,0.0,source
+TCGA-C8-A12Z,C8,asian,1.0,source
+TCGA-C8-A130,C8,asian,1.0,source
+TCGA-C8-A131,C8,asian,1.0,source
+TCGA-C8-A132,C8,asian,0.0,source
+TCGA-C8-A133,C8,white,0.0,source
+TCGA-C8-A134,C8,asian,1.0,source
+TCGA-C8-A135,C8,asian,1.0,source
+TCGA-C8-A137,C8,asian,0.0,source
+TCGA-C8-A138,C8,asian,1.0,source
+TCGA-C8-A1HE,C8,asian,0.0,source
+TCGA-C8-A1HF,C8,asian,1.0,source
+TCGA-C8-A1HG,C8,asian,1.0,source
+TCGA-C8-A1HI,C8,asian,0.0,source
+TCGA-C8-A1HJ,C8,asian,1.0,source
+TCGA-C8-A1HK,C8,asian,1.0,source
+TCGA-C8-A1HL,C8,asian,0.0,source
+TCGA-C8-A1HM,C8,asian,1.0,source
+TCGA-C8-A1HN,C8,asian,0.0,source
+TCGA-C8-A1HO,C8,asian,0.0,source
+TCGA-C8-A26V,C8,asian,1.0,source
+TCGA-C8-A26W,C8,asian,1.0,source
+TCGA-C8-A26X,C8,asian,1.0,source
+TCGA-C8-A26Y,C8,asian,0.0,source
+TCGA-C8-A26Z,C8,asian,0.0,source
+TCGA-C8-A273,C8,asian,0.0,source
+TCGA-C8-A274,C8,asian,0.0,source
+TCGA-C8-A275,C8,asian,1.0,source
+TCGA-C8-A278,C8,asian,1.0,source
+TCGA-C8-A27A,C8,asian,1.0,source
+TCGA-C8-A27B,C8,asian,1.0,source
+TCGA-C8-A3M7,C8,asian,0.0,source
+TCGA-C8-A3M8,C8,asian,0.0,source
+TCGA-C8-A8HP,C8,asian,1.0,source
+TCGA-C8-A8HQ,C8,asian,0.0,source
+TCGA-C8-A8HR,C8,asian,0.0,source
+TCGA-C8-A9FZ,C8,white,0.0,source
+TCGA-D8-A13Y,D8,white,1.0,source
+TCGA-D8-A13Z,D8,white,1.0,source
+TCGA-D8-A140,D8,white,0.0,source
+TCGA-D8-A141,D8,white,0.0,source
+TCGA-D8-A142,D8,white,1.0,source
+TCGA-D8-A143,D8,white,1.0,source
+TCGA-D8-A145,D8,white,0.0,source
+TCGA-D8-A146,D8,white,0.0,source
+TCGA-D8-A147,D8,white,1.0,source
+TCGA-D8-A1J8,D8,white,0.0,source
+TCGA-D8-A1J9,D8,white,1.0,source
+TCGA-D8-A1JA,D8,white,0.0,source
+TCGA-D8-A1JB,D8,white,0.0,source
+TCGA-D8-A1JC,D8,white,0.0,source
+TCGA-D8-A1JD,D8,white,0.0,source
+TCGA-D8-A1JE,D8,white,0.0,source
+TCGA-D8-A1JF,D8,white,1.0,source
+TCGA-D8-A1JG,D8,white,1.0,source
+TCGA-D8-A1JH,D8,white,0.0,source
+TCGA-D8-A1JI,D8,white,0.0,source
+TCGA-D8-A1JJ,D8,white,1.0,source
+TCGA-D8-A1JK,D8,white,1.0,source
+TCGA-D8-A1JL,D8,white,1.0,source
+TCGA-D8-A1JM,D8,white,1.0,source
+TCGA-D8-A1JN,D8,white,0.0,source
+TCGA-D8-A1JP,D8,white,0.0,source
+TCGA-D8-A1JS,D8,white,0.0,source
+TCGA-D8-A1JT,D8,white,0.0,source
+TCGA-D8-A1JU,D8,white,0.0,source
+TCGA-D8-A1X5,D8,white,1.0,source
+TCGA-D8-A1X6,D8,white,0.0,source
+TCGA-D8-A1X7,D8,white,0.0,source
+TCGA-D8-A1X8,D8,white,0.0,source
+TCGA-D8-A1X9,D8,white,0.0,source
+TCGA-D8-A1XA,D8,white,1.0,source
+TCGA-D8-A1XB,D8,white,0.0,source
+TCGA-D8-A1XC,D8,white,0.0,source
+TCGA-D8-A1XD,D8,white,0.0,source
+TCGA-D8-A1XF,D8,white,0.0,source
+TCGA-D8-A1XG,D8,white,0.0,source
+TCGA-D8-A1XJ,D8,white,1.0,source
+TCGA-D8-A1XK,D8,white,1.0,source
+TCGA-D8-A1XL,D8,white,1.0,source
+TCGA-D8-A1XM,D8,white,0.0,source
+TCGA-D8-A1XO,D8,white,0.0,source
+TCGA-D8-A1XQ,D8,white,1.0,source
+TCGA-D8-A1XR,D8,white,0.0,source
+TCGA-D8-A1XS,D8,white,0.0,source
+TCGA-D8-A1XT,D8,white,1.0,source
+TCGA-D8-A1XU,D8,white,0.0,source
+TCGA-D8-A1XV,D8,white,0.0,source
+TCGA-D8-A1XW,D8,white,1.0,source
+TCGA-D8-A1XY,D8,white,0.0,source
+TCGA-D8-A1XZ,D8,white,1.0,source
+TCGA-D8-A1Y0,D8,white,0.0,source
+TCGA-D8-A1Y1,D8,white,0.0,source
+TCGA-D8-A1Y2,D8,white,0.0,source
+TCGA-D8-A1Y3,D8,white,1.0,source
+TCGA-D8-A27E,D8,white,0.0,source
+TCGA-D8-A27F,D8,white,1.0,source
+TCGA-D8-A27G,D8,white,0.0,source
+TCGA-D8-A27H,D8,white,0.0,source
+TCGA-D8-A27I,D8,white,0.0,source
+TCGA-D8-A27K,D8,white,0.0,source
+TCGA-D8-A27L,D8,white,0.0,source
+TCGA-D8-A27M,D8,white,1.0,source
+TCGA-D8-A27N,D8,white,1.0,source
+TCGA-D8-A27P,D8,white,0.0,source
+TCGA-D8-A27R,D8,white,0.0,source
+TCGA-D8-A27T,D8,white,0.0,source
+TCGA-D8-A27V,D8,white,0.0,source
+TCGA-D8-A27W,D8,white,0.0,source
+TCGA-D8-A3Z5,D8,white,0.0,source
+TCGA-D8-A3Z6,D8,white,0.0,source
+TCGA-D8-A4Z1,D8,white,0.0,source
+TCGA-D8-A73U,D8,white,0.0,source
+TCGA-D8-A73W,D8,white,0.0,source
+TCGA-D8-A73X,D8,white,0.0,source
+TCGA-E2-A105,E2,white,0.0,source
+TCGA-E2-A106,E2,asian,0.0,source
+TCGA-E2-A107,E2,white,0.0,source
+TCGA-E2-A108,E2,white,0.0,source
+TCGA-E2-A109,E2,white,0.0,source
+TCGA-E2-A10A,E2,white,0.0,source
+TCGA-E2-A10B,E2,white,0.0,source
+TCGA-E2-A10C,E2,white,0.0,source
+TCGA-E2-A10E,E2,white,0.0,source
+TCGA-E2-A10F,E2,white,0.0,source
+TCGA-E2-A14N,E2,white,1.0,source
+TCGA-E2-A14O,E2,white,0.0,source
+TCGA-E2-A14P,E2,white,1.0,source
+TCGA-E2-A14Q,E2,white,0.0,source
+TCGA-E2-A14R,E2,white,1.0,source
+TCGA-E2-A14S,E2,white,0.0,source
+TCGA-E2-A14T,E2,white,0.0,source
+TCGA-E2-A14U,E2,white,0.0,source
+TCGA-E2-A14V,E2,white,0.0,source
+TCGA-E2-A14W,E2,white,0.0,source
+TCGA-E2-A14X,E2,black or african american,1.0,source
+TCGA-E2-A14Y,E2,white,1.0,source
+TCGA-E2-A14Z,E2,white,1.0,source
+TCGA-E2-A150,E2,white,1.0,source
+TCGA-E2-A152,E2,white,1.0,source
+TCGA-E2-A153,E2,white,0.0,source
+TCGA-E2-A154,E2,white,0.0,source
+TCGA-E2-A155,E2,white,1.0,source
+TCGA-E2-A156,E2,white,0.0,source
+TCGA-E2-A158,E2,white,1.0,source
+TCGA-E2-A159,E2,white,1.0,source
+TCGA-E2-A15A,E2,white,0.0,source
+TCGA-E2-A15C,E2,white,0.0,source
+TCGA-E2-A15D,E2,white,0.0,source
+TCGA-E2-A15E,E2,white,1.0,source
+TCGA-E2-A15F,E2,white,0.0,source
+TCGA-E2-A15G,E2,white,0.0,source
+TCGA-E2-A15H,E2,white,0.0,source
+TCGA-E2-A15I,E2,white,0.0,source
+TCGA-E2-A15J,E2,white,0.0,source
+TCGA-E2-A15K,E2,white,0.0,source
+TCGA-E2-A15L,E2,black or african american,0.0,source
+TCGA-E2-A15M,E2,white,1.0,source
+TCGA-E2-A15O,E2,black or african american,0.0,source
+TCGA-E2-A15P,E2,white,0.0,source
+TCGA-E2-A15R,E2,white,0.0,source
+TCGA-E2-A15S,E2,white,0.0,source
+TCGA-E2-A15T,E2,white,0.0,source
+TCGA-E2-A1AZ,E2,white,0.0,source
+TCGA-E2-A1B0,E2,white,1.0,source
+TCGA-E2-A1B1,E2,white,0.0,source
+TCGA-E2-A1B4,E2,white,0.0,source
+TCGA-E2-A1B5,E2,white,0.0,source
+TCGA-E2-A1B6,E2,white,1.0,source
+TCGA-E2-A1BC,E2,not reported,0.0,source
+TCGA-E2-A1BD,E2,white,0.0,source
+TCGA-E2-A1IE,E2,white,0.0,source
+TCGA-E2-A1IF,E2,white,0.0,source
+TCGA-E2-A1IG,E2,white,0.0,source
+TCGA-E2-A1IH,E2,white,0.0,source
+TCGA-E2-A1II,E2,white,1.0,source
+TCGA-E2-A1IJ,E2,white,0.0,source
+TCGA-E2-A1IK,E2,white,0.0,source
+TCGA-E2-A1IL,E2,white,0.0,source
+TCGA-E2-A1IN,E2,white,1.0,source
+TCGA-E2-A1IO,E2,white,1.0,source
+TCGA-E2-A1IU,E2,white,0.0,source
+TCGA-E2-A1L6,E2,white,0.0,source
+TCGA-E2-A1L7,E2,white,1.0,source
+TCGA-E2-A1L8,E2,black or african american,0.0,source
+TCGA-E2-A1L9,E2,white,0.0,source
+TCGA-E2-A1LA,E2,not reported,0.0,source
+TCGA-E2-A1LB,E2,black or african american,0.0,source
+TCGA-E2-A1LE,E2,white,0.0,source
+TCGA-E2-A1LG,E2,black or african american,1.0,source
+TCGA-E2-A1LH,E2,white,1.0,source
+TCGA-E2-A1LI,E2,white,0.0,source
+TCGA-E2-A1LK,E2,black or african american,1.0,source
+TCGA-E2-A1LL,E2,black or african american,0.0,source
+TCGA-E2-A1LS,E2,white,1.0,source
+TCGA-E2-A2P5,E2,black or african american,1.0,source
+TCGA-E2-A2P6,E2,not reported,0.0,source
+TCGA-E2-A3DX,E2,white,0.0,source
+TCGA-E2-A56Z,E2,black or african american,0.0,source
+TCGA-E2-A570,E2,black or african american,0.0,source
+TCGA-E2-A572,E2,black or african american,0.0,source
+TCGA-E2-A573,E2,black or african american,1.0,source
+TCGA-E2-A574,E2,black or african american,1.0,source
+TCGA-E2-A576,E2,black or african american,0.0,source
+TCGA-E2-A9RU,E2,black or african american,1.0,source
+TCGA-E9-A1N3,E9,white,0.0,source
+TCGA-E9-A1N4,E9,white,0.0,source
+TCGA-E9-A1N5,E9,white,1.0,source
+TCGA-E9-A1N6,E9,white,0.0,source
+TCGA-E9-A1N8,E9,white,1.0,source
+TCGA-E9-A1N9,E9,white,1.0,source
+TCGA-E9-A1NA,E9,white,0.0,source
+TCGA-E9-A1NC,E9,white,1.0,source
+TCGA-E9-A1ND,E9,white,1.0,source
+TCGA-E9-A1NE,E9,white,0.0,source
+TCGA-E9-A1NF,E9,white,1.0,source
+TCGA-E9-A1NG,E9,white,0.0,source
+TCGA-E9-A1NH,E9,white,0.0,source
+TCGA-E9-A1NI,E9,white,0.0,source
+TCGA-E9-A1QZ,E9,white,0.0,source
+TCGA-E9-A1R0,E9,white,0.0,source
+TCGA-E9-A1R2,E9,white,0.0,source
+TCGA-E9-A1R3,E9,white,0.0,source
+TCGA-E9-A1R4,E9,white,0.0,source
+TCGA-E9-A1R5,E9,white,0.0,source
+TCGA-E9-A1R6,E9,white,0.0,source
+TCGA-E9-A1R7,E9,white,0.0,source
+TCGA-E9-A1RA,E9,white,0.0,source
+TCGA-E9-A1RB,E9,white,1.0,source
+TCGA-E9-A1RC,E9,white,0.0,source
+TCGA-E9-A1RD,E9,white,0.0,source
+TCGA-E9-A1RE,E9,white,0.0,source
+TCGA-E9-A1RF,E9,white,0.0,source
+TCGA-E9-A1RG,E9,white,0.0,source
+TCGA-E9-A1RH,E9,white,1.0,source
+TCGA-E9-A1RI,E9,white,0.0,source
+TCGA-E9-A226,E9,white,1.0,source
+TCGA-E9-A227,E9,white,0.0,source
+TCGA-E9-A228,E9,white,0.0,source
+TCGA-E9-A229,E9,white,0.0,source
+TCGA-E9-A22A,E9,white,0.0,source
+TCGA-E9-A22B,E9,white,0.0,source
+TCGA-E9-A22D,E9,white,0.0,source
+TCGA-E9-A22E,E9,white,1.0,source
+TCGA-E9-A22G,E9,white,1.0,source
+TCGA-E9-A22H,E9,white,0.0,source
+TCGA-E9-A243,E9,white,1.0,source
+TCGA-E9-A244,E9,white,1.0,source
+TCGA-E9-A245,E9,white,0.0,source
+TCGA-E9-A247,E9,white,0.0,source
+TCGA-E9-A248,E9,white,1.0,source
+TCGA-E9-A249,E9,white,0.0,source
+TCGA-E9-A24A,E9,white,0.0,source
+TCGA-E9-A295,E9,white,0.0,source
+TCGA-E9-A2JS,E9,white,0.0,source
+TCGA-E9-A2JT,E9,white,0.0,source
+TCGA-E9-A3HO,E9,white,0.0,source
+TCGA-E9-A3Q9,E9,white,0.0,source
+TCGA-E9-A3QA,E9,white,0.0,source
+TCGA-E9-A3X8,E9,white,0.0,source
+TCGA-E9-A54X,E9,white,0.0,source
+TCGA-E9-A54Y,E9,white,0.0,source
+TCGA-E9-A5FK,E9,white,0.0,source
+TCGA-E9-A5FL,E9,white,1.0,source
+TCGA-E9-A5UO,E9,white,0.0,source
+TCGA-E9-A5UP,E9,white,0.0,source
+TCGA-E9-A6HE,E9,white,1.0,source
+TCGA-EW-A1IW,EW,white,0.0,F3
+TCGA-EW-A1IX,EW,asian,0.0,F3
+TCGA-EW-A1IY,EW,asian,0.0,F3
+TCGA-EW-A1IZ,EW,white,0.0,F3
+TCGA-EW-A1J1,EW,white,0.0,F3
+TCGA-EW-A1J2,EW,black or african american,0.0,F3
+TCGA-EW-A1J3,EW,white,0.0,F3
+TCGA-EW-A1J5,EW,white,0.0,F3
+TCGA-EW-A1J6,EW,white,0.0,F3
+TCGA-EW-A1OV,EW,white,0.0,F3
+TCGA-EW-A1OW,EW,black or african american,0.0,F3
+TCGA-EW-A1OX,EW,white,0.0,F3
+TCGA-EW-A1OY,EW,white,1.0,F3
+TCGA-EW-A1OZ,EW,black or african american,1.0,F3
+TCGA-EW-A1P0,EW,white,0.0,F3
+TCGA-EW-A1P1,EW,white,1.0,F3
+TCGA-EW-A1P3,EW,white,0.0,F3
+TCGA-EW-A1P4,EW,white,1.0,F3
+TCGA-EW-A1P5,EW,white,0.0,F3
+TCGA-EW-A1P6,EW,white,0.0,F3
+TCGA-EW-A1P7,EW,white,0.0,F3
+TCGA-EW-A1P8,EW,white,1.0,F3
+TCGA-EW-A1PA,EW,white,1.0,F3
+TCGA-EW-A1PB,EW,black or african american,1.0,F3
+TCGA-EW-A1PC,EW,black or african american,0.0,F3
+TCGA-EW-A1PD,EW,white,0.0,F3
+TCGA-EW-A1PE,EW,white,0.0,F3
+TCGA-EW-A1PF,EW,white,0.0,F3
+TCGA-EW-A1PG,EW,white,0.0,F3
+TCGA-EW-A1PH,EW,white,1.0,F3
+TCGA-EW-A2FR,EW,black or african american,0.0,F3
+TCGA-EW-A2FS,EW,black or african american,0.0,F3
+TCGA-EW-A2FV,EW,white,0.0,F3
+TCGA-EW-A2FW,EW,white,0.0,F3
+TCGA-EW-A3E8,EW,white,0.0,F3
+TCGA-EW-A3U0,EW,black or african american,0.0,F3
+TCGA-EW-A423,EW,white,0.0,F3
+TCGA-EW-A424,EW,white,0.0,F3
+TCGA-EW-A6S9,EW,black or african american,1.0,F3
+TCGA-EW-A6SA,EW,black or african american,0.0,F3
+TCGA-EW-A6SB,EW,black or african american,1.0,F3
+TCGA-EW-A6SC,EW,black or african american,0.0,F3
+TCGA-EW-A6SD,EW,black or african american,1.0,F3
+TCGA-GI-A2C8,GI,white,0.0,source
+TCGA-GI-A2C9,GI,black or african american,0.0,source
+TCGA-GM-A2D9,GM,white,0.0,source
+TCGA-GM-A2DA,GM,white,0.0,source
+TCGA-GM-A2DB,GM,white,1.0,source
+TCGA-GM-A2DC,GM,white,0.0,source
+TCGA-GM-A2DD,GM,white,1.0,source
+TCGA-GM-A2DF,GM,black or african american,1.0,source
+TCGA-GM-A2DH,GM,white,1.0,source
+TCGA-GM-A2DI,GM,white,1.0,source
+TCGA-GM-A2DK,GM,white,0.0,source
+TCGA-GM-A2DL,GM,white,1.0,source
+TCGA-GM-A2DM,GM,white,0.0,source
+TCGA-GM-A2DN,GM,white,0.0,source
+TCGA-GM-A2DO,GM,black or african american,0.0,source
+TCGA-GM-A3NW,GM,white,0.0,source
+TCGA-GM-A3NY,GM,white,0.0,source
+TCGA-GM-A3XG,GM,white,0.0,source
+TCGA-GM-A3XL,GM,black or african american,1.0,source
+TCGA-GM-A3XN,GM,white,0.0,source
+TCGA-GM-A4E0,GM,white,0.0,source
+TCGA-HN-A2NL,HN,not reported,1.0,source
+TCGA-HN-A2OB,HN,not reported,0.0,source
+TCGA-JL-A3YW,JL,asian,0.0,source
+TCGA-JL-A3YX,JL,asian,0.0,source
+TCGA-LD-A66U,LD,white,0.0,source
+TCGA-LD-A74U,LD,white,1.0,source
+TCGA-LD-A7W5,LD,black or african american,1.0,source
+TCGA-LD-A7W6,LD,white,0.0,source
+TCGA-LD-A9QF,LD,black or african american,0.0,source
+TCGA-LL-A440,LL,white,0.0,F3
+TCGA-LL-A441,LL,black or african american,0.0,F3
+TCGA-LL-A442,LL,black or african american,0.0,F3
+TCGA-LL-A50Y,LL,white,0.0,F3
+TCGA-LL-A5YL,LL,white,0.0,F3
+TCGA-LL-A5YM,LL,black or african american,0.0,F3
+TCGA-LL-A5YN,LL,black or african american,0.0,F3
+TCGA-LL-A5YO,LL,black or african american,1.0,F3
+TCGA-LL-A5YP,LL,black or african american,1.0,F3
+TCGA-LL-A6FP,LL,white,0.0,F3
+TCGA-LL-A6FQ,LL,black or african american,0.0,F3
+TCGA-LL-A6FR,LL,black or african american,1.0,F3
+TCGA-LL-A73Y,LL,black or african american,1.0,F3
+TCGA-LL-A73Z,LL,black or african american,0.0,F3
+TCGA-LL-A740,LL,black or african american,0.0,F3
+TCGA-LL-A7SZ,LL,black or african american,0.0,F3
+TCGA-LL-A7T0,LL,black or african american,0.0,F3
+TCGA-LL-A8F5,LL,black or african american,1.0,F3
+TCGA-LL-A9Q3,LL,white,0.0,F3
+TCGA-LQ-A4E4,LQ,white,0.0,source
+TCGA-MS-A51U,MS,white,0.0,source
+TCGA-OK-A5Q2,OK,not reported,0.0,source
+TCGA-OL-A5D6,OL,black or african american,1.0,F3
+TCGA-OL-A5D7,OL,black or african american,1.0,F3
+TCGA-OL-A5D8,OL,black or african american,0.0,F3
+TCGA-OL-A5DA,OL,white,0.0,F3
+TCGA-OL-A5RU,OL,black or african american,0.0,F3
+TCGA-OL-A5RV,OL,black or african american,0.0,F3
+TCGA-OL-A5RW,OL,black or african american,1.0,F3
+TCGA-OL-A5RX,OL,black or african american,0.0,F3
+TCGA-OL-A5RY,OL,black or african american,0.0,F3
+TCGA-OL-A5RZ,OL,black or african american,0.0,F3
+TCGA-OL-A5S0,OL,black or african american,0.0,F3
+TCGA-OL-A66H,OL,black or african american,0.0,F3
+TCGA-OL-A66I,OL,black or african american,1.0,F3
+TCGA-OL-A66J,OL,white,0.0,F3
+TCGA-OL-A66K,OL,white,0.0,F3
+TCGA-OL-A66L,OL,black or african american,0.0,F3
+TCGA-OL-A66N,OL,white,0.0,F3
+TCGA-OL-A66O,OL,black or african american,0.0,F3
+TCGA-OL-A66P,OL,black or african american,0.0,F3
+TCGA-OL-A6VO,OL,black or african american,1.0,F3
+TCGA-OL-A6VQ,OL,white,0.0,F3
+TCGA-OL-A97C,OL,black or african american,0.0,F3
+TCGA-PE-A5DC,PE,white,0.0,source
+TCGA-PE-A5DD,PE,asian,0.0,source
+TCGA-PE-A5DE,PE,white,1.0,source
+TCGA-PL-A8LV,PL,black or african american,1.0,source
+TCGA-PL-A8LX,PL,black or african american,0.0,source
+TCGA-PL-A8LY,PL,black or african american,0.0,source
+TCGA-PL-A8LZ,PL,black or african american,1.0,source
+TCGA-S3-A6ZF,S3,black or african american,0.0,F1
+TCGA-S3-A6ZG,S3,black or african american,0.0,F1
+TCGA-S3-A6ZH,S3,black or african american,0.0,F1
+TCGA-S3-AA0Z,S3,black or african american,1.0,F1
+TCGA-S3-AA10,S3,black or african american,1.0,F1
+TCGA-S3-AA11,S3,black or african american,0.0,F1
+TCGA-S3-AA12,S3,black or african american,0.0,F1
+TCGA-S3-AA14,S3,black or african american,0.0,F1
+TCGA-S3-AA15,S3,black or african american,0.0,F1
+TCGA-S3-AA17,S3,black or african american,0.0,F1
+TCGA-UL-AAZ6,UL,black or african american,0.0,source
+TCGA-UU-A93S,UU,black or african american,1.0,source
+TCGA-W8-A86G,W8,white,0.0,source
+TCGA-WT-AB41,WT,black or african american,0.0,source
+TCGA-WT-AB44,WT,white,0.0,source
+TCGA-XX-A899,XX,white,0.0,source
+TCGA-XX-A89A,XX,white,0.0,source
+TCGA-Z7-A8R5,Z7,white,0.0,source
+TCGA-Z7-A8R6,Z7,white,1.0,source

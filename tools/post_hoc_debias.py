@@ -237,7 +237,7 @@ def _clean(v):
     return v not in ("", None)
 
 
-def build_task_cohort(task, demo, mol, fold_col_arg, log=print):
+def build_task_cohort(task, demo, mol, fold_col_arg, label_col_arg=None, log=print):
     """Returns (label_of, fold_of, cohort_barcodes).
     label_of[bc] in {0,1}; fold_of[bc] = int fold (KFold-generated if absent)."""
     label_of, fold_of = {}, {}
@@ -262,12 +262,44 @@ def build_task_cohort(task, demo, mol, fold_col_arg, log=print):
             for bc in list(label_of):
                 if _clean(mol.get(bc, {}).get(fold_col)):
                     fold_of[bc] = int(float(mol[bc][fold_col]))
-    elif task in ("nsclc", "glioma"):
+    elif task in ("nsclc", "glioma", "brca"):
+        # brca == IDC (0) vs ILC (1), read from label_brca / fold_brca in the
+        # demographics CSV -- the SAME label fairness_eval's native `brca` task
+        # uses (tcga_labels_folds(demo, "brca")), so the post-hoc and
+        # pretraining arms are poolable. Same code path as nsclc/glioma:
+        # label_<task> / fold_<task> keyed on patient_barcode.
         label_col, fold_col = f"label_{task}", (fold_col_arg or f"fold_{task}")
         for bc, r in demo.items():
             if _clean(r.get(label_col)) and _clean(r.get(fold_col)):
                 label_of[bc] = int(float(r[label_col]))
                 fold_of[bc] = int(float(r[fold_col]))
+    elif label_col_arg:
+        # Generic external LOCAL cohort (dcis_duke / cptac_gbm): binary label read
+        # from the --molecular-csv column named by --label-col, keyed on
+        # patient_barcode; race/gender/age come from --demographics-csv (see
+        # sensitive_of). Mirrors fairness_eval's generic external-cohort branch. A
+        # populated --fold-col naturally restricts the cohort to labeled+folded
+        # patients; with no --fold-col (e.g. cptac_gbm) fold_of stays empty and the
+        # deterministic StratifiedKFold below assigns folds for ALL cohort members.
+        for bc, m in mol.items():
+            lv = m.get(label_col_arg, "")
+            if lv in ("", None):
+                continue
+            fv = m.get(fold_col_arg, "") if fold_col_arg else None
+            if fold_col_arg and fv in ("", None):
+                continue
+            try:
+                label_of[bc] = int(float(lv))
+            except (ValueError, TypeError):
+                continue
+            if fold_col_arg:
+                try:
+                    fold_of[bc] = int(float(fv))
+                except (ValueError, TypeError):
+                    label_of.pop(bc, None)
+                    continue
+        log(f"  [{task}] external labels from molecular-csv label_col={label_col_arg} "
+            f"fold_col={fold_col_arg}: {len(label_of)} labeled patients")
     else:
         raise ValueError(f"unknown task {task}")
 
@@ -461,7 +493,8 @@ def _inverse_freq_weights(aidx_train, attrs, device, torch, log=print):
 
 
 # =============================================== contrastive + pcgrad (trunk-level)
-def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None):
+def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None,
+                  task_labels=None):
     """Fair supervised-contrastive term on the hidden ``h`` using the DEMOGRAPHIC
     label. It is the standard SupCon objective with the positive set INVERTED:
     for each anchor, the positives are the tiles of a DIFFERENT demographic value.
@@ -489,6 +522,8 @@ def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None):
             continue
         vv = valid.unsqueeze(0) & valid.unsqueeze(1)
         pos = (lab.unsqueeze(0) != lab.unsqueeze(1)) & vv & ~eye   # DIFFERENT demo
+        if task_labels is not None:
+            pos = pos & (task_labels.unsqueeze(0) == task_labels.unsqueeze(1))  # AND same task class
         pos_cnt = pos.sum(1)
         rows = valid & (pos_cnt > 0)
         if int(rows.sum()) == 0:
@@ -562,7 +597,8 @@ def _demo_probe_auc(h_tr, aidx_tr, h_ev, aidx_ev, attrs):
 def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
                          sens, sensitive, eval_fold, lambd, hidden, lr, epochs,
                          batch_size, device, method, contrast_temp=0.1,
-                         race_weight="none", log=print):
+                         race_weight="none", dump_records=False,
+                         condition_on_label=False, log=print):
     """Trunk-level debiasing loop for method in {contrastive, pcgrad}. The TASK
     head (Linear1 -> h -> Linear2) trains on the task label as usual; the
     debiasing loss operates on h with weight/knob ``lambd`` (lambd=0 == baseline,
@@ -589,6 +625,8 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
 
     Xtr = torch.tensor(emb_task[is_train_task], dtype=torch.float32).to(device)
     ytr = torch.tensor(y_task[is_train_task], dtype=torch.float32).to(device)
+    ytr_long = torch.tensor(np.asarray(y_task[is_train_task], dtype=np.int64),
+                            dtype=torch.long, device=device)
     aidx_tr_np = {a: aidx_task[a][is_train_task] for a in attrs}
     aidx_tr = {a: torch.tensor(aidx_tr_np[a], device=device) for a in attrs}
 
@@ -631,9 +669,11 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
             if method == "contrastive":
                 loss = task_loss
                 if lambd != 0:
+                    tlabels = ytr_long[idx] if condition_on_label else None
                     loss = loss + lambd * _fair_supcon(h, labb, attrs,
                                                        contrast_temp, torch, F,
-                                                       weights=cw)
+                                                       weights=cw,
+                                                       task_labels=tlabels)
                 opt.zero_grad(); loss.backward(); opt.step()
 
             elif lambd == 0:                             # pcgrad baseline: task only
@@ -732,13 +772,16 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
         log(f"    [pcgrad] grad-cosine(task,demo) pre="
             f"{res['pcgrad_cosine']['pre_mean']} -> post="
             f"{res['pcgrad_cosine']['post_mean']}  ({len(cos_pre)} proj batches)")
+    if dump_records:
+        res["predictions"] = _predictions_list(patient_ids, y_pat, p_hat, groups)
     return res
 
 
 def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
                    sens, sensitive, eval_fold, lambd, hidden, lr, epochs,
                    batch_size, device, method="dann", proto_temp=0.1,
-                   proto_ema=0.9, race_weight="none", log=print):
+                   proto_ema=0.9, race_weight="none", dump_records=False,
+                   condition_on_label=False, log=print):
     torch = _torch()
     import torch.nn as nn
     from sklearn.metrics import roc_auc_score
@@ -747,7 +790,9 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
         return _train_eval_projfree(
             emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of, sens,
             sensitive, eval_fold, lambd, hidden, lr, epochs, batch_size, device,
-            method, contrast_temp=proto_temp, race_weight=race_weight, log=log)
+            method, contrast_temp=proto_temp, race_weight=race_weight,
+            dump_records=dump_records, condition_on_label=condition_on_label,
+            log=log)
 
     torch.manual_seed(SEED); np.random.seed(SEED)
     attrs = _needed_attrs(sensitive)
@@ -872,7 +917,7 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
         except Exception:
             adv_auc[a] = None
 
-    return {
+    res = {
         "lambda": lambd,
         "overall_auc": overall_auc,
         "n_eval_patients": len(patient_ids),
@@ -882,6 +927,9 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
         "attributes": attributes,
         "adversary_demo_auc": adv_auc,
     }
+    if dump_records:
+        res["predictions"] = _predictions_list(patient_ids, y_pat, p_hat, groups)
+    return res
 
 
 # module-level demographics row lookup for build_group_arrays -------------------
@@ -893,13 +941,37 @@ def sens_row_lookup(pid):
 MIN_N = 15
 
 
+def _predictions_list(patient_ids, y_pat, p_hat, groups):
+    """Per-patient held-out eval-fold records for --dump-predictions: the SAME
+    patient scores/labels/subgroup labels that feed subgroup_report, plus raw
+    age_years from the joined demographics row."""
+    out = []
+    for i, pid in enumerate(patient_ids):
+        row = _DEMO_MAP.get(pid) or {}
+        try:
+            age_val = float(row.get("age_years", ""))
+        except (ValueError, TypeError):
+            age_val = None
+        out.append({
+            "patient_id": pid,
+            "y_true": int(y_pat[i]),
+            "y_score": float(p_hat[i]),
+            "race": groups["race"][i],
+            "sex": groups["sex"][i],
+            "age": age_val,
+        })
+    return out
+
+
 # ============================================================== main
 def main():
     ap = argparse.ArgumentParser(description="Post-hoc DANN debiasing head (frozen encoder)")
     ap.add_argument("--checkpoint", default=None,
                     help="DinoV2ViT .pt (omit/missing -> random backbone, proves plumbing)")
     ap.add_argument("--task", required=True,
-                    choices=["brca_tp53", "lihc_grade", "ucec_tp53", "nsclc", "glioma"])
+                    choices=["brca_tp53", "brca", "lihc_grade", "ucec_tp53",
+                             "nsclc", "glioma", "cptac_nsclc", "dcis_duke",
+                             "cptac_gbm"])
     ap.add_argument("--sensitive", required=True, choices=["race", "sex", "both"])
     ap.add_argument("--adversary-data", required=True, choices=["task_only", "matched_pool"])
     ap.add_argument("--method", choices=["dann", "fino", "contrastive", "pcgrad"],
@@ -922,6 +994,15 @@ def main():
                          "weight) and contrastive (per-anchor weight). 'none' "
                          "(default) is byte-identical to the original behavior.")
     ap.add_argument("--fold-col", default=None)
+    ap.add_argument("--label-col", default=None,
+                    help="external local cohort (dcis_duke / cptac_gbm): read the "
+                         "binary label from this --molecular-csv column, keyed on "
+                         "patient_barcode; race/gender/age come from "
+                         "--demographics-csv. Mirrors fairness_eval's generic "
+                         "external-cohort branch. A populated --fold-col restricts "
+                         "the cohort to labeled+folded patients; without one, an "
+                         "internal StratifiedKFold (seed) is generated. Default "
+                         "None = the TCGA/CPTAC label paths (unchanged).")
     ap.add_argument("--eval-fold", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--hidden", type=int, default=128)
@@ -932,6 +1013,9 @@ def main():
     ap.add_argument("--max-pool-slides", type=int, default=400)
     ap.add_argument("--max-tiles-per-slide", type=int, default=0, help="0 = all")
     ap.add_argument("--tiles-dir", default="/data/TCGA-12K-parquet")
+    ap.add_argument("--labels-tsv", default=None,
+                    help="CPTAC labels TSV (case_id/subtype) -- required when "
+                         "--task cptac_nsclc; ignored for TCGA tasks.")
     ap.add_argument("--hf-repo", default=None,
                     help="Feature 2: HF dataset repo id (e.g. "
                          "ryankim17920/nanopath-fairness-tiles). When set AND the "
@@ -951,8 +1035,37 @@ def main():
     ap.add_argument("--cache-dir", default="/admin/home/ryan.kim/nt/tools/.debias_cache")
     ap.add_argument("--variant", default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--dump-predictions", default=None,
+                    help="if set, write a per-patient held-out eval-fold JSONL "
+                         "(patient_id, y_true, y_score, race, sex, age) for the "
+                         "DEBIASED run (falls back to baseline when lambda=0) to "
+                         "this path. Default None = unchanged; --out JSON stays "
+                         "byte-identical.")
+    ap.add_argument("--hospital-folds-csv", default=None,
+                    help="Hospital-fold CSV (patient_barcode + fold column). When "
+                         "--hospital-fold is set, restrict the cohort to patients "
+                         "in that fold and assign a fresh internal StratifiedKFold. "
+                         "Default: data/metadata/brca_hospital_folds.csv (only used "
+                         "when --hospital-fold is set).")
+    ap.add_argument("--hospital-fold", default=None,
+                    help="Hospital fold label (e.g. F1/F2/F3). Subsets cohort to "
+                         "only those patients, then assigns --inner-splits fresh "
+                         "inner folds for internal-CV OOF predictions. Default None "
+                         "= no hospital restriction (unchanged behavior).")
+    ap.add_argument("--inner-splits", type=int, default=5,
+                    help="Number of inner CV splits when --hospital-fold is set "
+                         "(default 5, stratified by task label, seed 1337).")
+    ap.add_argument("--condition-on-label", action="store_true",
+                    help="When --method contrastive: AND the SupCon positive mask "
+                         "with task-label equality so positives are "
+                         "'different-demographic AND same-task-class' "
+                         "(equalized-odds-aligned). No effect for dann/fino/pcgrad.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+
+    if args.condition_on_label and args.method != "contrastive":
+        ap.error(f"--condition-on-label is only supported with --method contrastive, "
+                 f"not --method {args.method}")
 
     torch = _torch()
     log = print
@@ -962,14 +1075,89 @@ def main():
         f"adversary_data={args.adversary_data}  lambda={args.lambda_adv}")
 
     # metadata ------------------------------------------------------------
-    demo = fe.load_demographics(args.demographics_csv, "patient_barcode")
-    mol = fe.load_demographics(args.molecular_csv, "patient_barcode")
-    label_of, fold_of, cohort = build_task_cohort(args.task, demo, mol, args.fold_col, log)
-    sens = sensitive_of(demo)
     global _DEMO_MAP
-    _DEMO_MAP = demo
+    is_cptac = args.task == "cptac_nsclc"
+    # External LOCAL cohorts (Duke DCIS, CPTAC-GBM): leak-free, case_id-keyed
+    # parquet tiles + generic --molecular-csv/--label-col labels. They take the
+    # same case_id-aware tile-index path as CPTAC (NOT the TCGA slide-path
+    # collect_tiles), but their labels/folds come through build_task_cohort's
+    # generic branch, so they use the non-cptac metadata branch below.
+    is_external_local = args.task in ("dcis_duke", "cptac_gbm")
+    if is_cptac:
+        # External CPTAC-NSCLC subtype task (leak-free: no encoder saw it). The
+        # debias head trains + evaluates on an internal deterministic 5-fold split
+        # of the CPTAC patients; eval_fold is the held-out TEST fold.
+        if not args.labels_tsv:
+            ap.error("--task cptac_nsclc requires --labels-tsv")
+        demo = fe.load_demographics(args.demographics_csv, "case_id")
+        label_of = dict(fe.cptac_labels(args.labels_tsv))
+        cohort = set(label_of)
+        from sklearn.model_selection import StratifiedKFold
+        cids = sorted(cohort)
+        yv = np.array([label_of[c] for c in cids])
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+        fold_of = {}
+        for k, (_, va) in enumerate(skf.split(cids, yv)):
+            for i in va:
+                fold_of[cids[i]] = k
+        sens = sensitive_of(demo)
+        _DEMO_MAP = demo
+    else:
+        demo = fe.load_demographics(args.demographics_csv, "patient_barcode")
+        mol = fe.load_demographics(args.molecular_csv, "patient_barcode")
+        label_of, fold_of, cohort = build_task_cohort(
+            args.task, demo, mol, args.fold_col, args.label_col, log)
+        sens = sensitive_of(demo)
+        _DEMO_MAP = demo
     log(f"[debias] cohort={len(cohort)} patients; folds present for "
         f"{len(fold_of)}; eval_fold={args.eval_fold}")
+
+    # Hospital-fold restriction (internal-CV deployment study) ------------
+    if args.hospital_fold:
+        import csv as _csv
+        hf_csv = args.hospital_folds_csv or \
+            "/admin/home/ryan.kim/nt/data/metadata/brca_hospital_folds.csv"
+        if not os.path.exists(hf_csv):
+            ap.error(f"--hospital-fold set but hospital-folds CSV not found: {hf_csv}")
+        hf_map = {}
+        with open(hf_csv) as fh:
+            for row in _csv.DictReader(fh):
+                bc = row.get("patient_barcode", "").strip()
+                fold = row.get("fold", "").strip()
+                if bc and fold:
+                    hf_map[bc] = fold
+        hospital_patients = {bc for bc, f in hf_map.items() if f == args.hospital_fold}
+        hospital_patients &= cohort  # intersect with task cohort
+        if not hospital_patients:
+            ap.error(f"--hospital-fold {args.hospital_fold} has zero patients "
+                     f"in the task cohort (cohort={len(cohort)}, "
+                     f"fold match={len(hospital_patients)})")
+        # Subsets label_of/fold_of to hospital patients only
+        label_of = {bc: label_of[bc] for bc in hospital_patients}
+        # Generate fresh inner StratifiedKFold on hospital patients
+        from sklearn.model_selection import StratifiedKFold
+        h_bcs = sorted(label_of)
+        h_y = np.array([label_of[b] for b in h_bcs])
+        n_pos = int(h_y.sum())
+        n_neg = len(h_y) - n_pos
+        min_class = min(n_pos, n_neg)
+        inner_k = args.inner_splits
+        if min_class < inner_k:
+            inner_k = max(2, min_class)
+            log(f"[debias] hospital fold {args.hospital_fold}: min class count "
+                f"({min_class}) < --inner-splits ({args.inner_splits}), "
+                f"reducing to {inner_k} inner splits")
+        if inner_k < 2:
+            ap.error(f"--hospital-fold {args.hospital_fold}: too few samples "
+                     f"of minority class ({min_class}) for any valid CV split")
+        skf = StratifiedKFold(n_splits=inner_k, shuffle=True, random_state=SEED)
+        fold_of = {}
+        for k, (_, va) in enumerate(skf.split(h_bcs, h_y)):
+            for i in va:
+                fold_of[h_bcs[i]] = k
+        cohort = set(h_bcs)
+        log(f"[debias] hospital fold '{args.hospital_fold}': {len(cohort)} patients, "
+            f"{inner_k} inner folds (pos={n_pos}, neg={n_neg})")
 
     # backbone (probe.py path) -------------------------------------------
     log("[debias] building backbone")
@@ -1000,9 +1188,20 @@ def main():
 
     # collect + embed tiles (cached) -------------------------------------
     log("[debias] collecting tiles")
-    task_tiles, pool_tiles = collect_tiles(
-        tiles_dir, cohort, sens, args.sensitive, args.adversary_data,
-        args.max_task_slides, args.max_pool_slides, args.max_tiles_per_slide, log)
+    if is_cptac or is_external_local:
+        # CPTAC / external-local (Duke, GBM) parquet is case_id-keyed (not TCGA
+        # slide_path); reuse fairness_eval's case_id-aware indexer. Every cohort
+        # patient is a task patient, so there is no matched-pool set (pool stays
+        # empty -> the matched_pool regime degenerates GRACEFULLY to task_only for
+        # these external tasks; the emb_pool guard below skips the empty pool).
+        pids, idx_tiles = fe.build_tile_index(
+            tiles_dir, cohort, 0, args.max_tiles_per_slide, log)
+        task_tiles = [(pids[pidx], jpg) for pidx, jpg in idx_tiles]
+        pool_tiles = []
+    else:
+        task_tiles, pool_tiles = collect_tiles(
+            tiles_dir, cohort, sens, args.sensitive, args.adversary_data,
+            args.max_task_slides, args.max_pool_slides, args.max_tiles_per_slide, log)
     if not task_tiles:
         ap.error("no task tiles collected -- check tiles-dir / cohort")
 
@@ -1035,7 +1234,8 @@ def main():
             args.sensitive, args.eval_fold, lam, args.hidden, args.lr,
             args.epochs, args.batch_size, device, method=args.method,
             proto_temp=args.proto_temp, proto_ema=args.proto_ema,
-            race_weight=args.race_weight, log=log)
+            race_weight=args.race_weight,
+            condition_on_label=args.condition_on_label, log=log)
 
     res = {
         "task": args.task, "sensitive": args.sensitive,
@@ -1043,6 +1243,9 @@ def main():
         "proto_ema": args.proto_ema,
         "adversary_data": args.adversary_data, "fold_col": args.fold_col,
         "race_weight": args.race_weight,
+        "condition_on_label": args.condition_on_label,
+        "hospital_fold": args.hospital_fold,
+        "inner_splits": args.inner_splits,
         "hf_repo": args.hf_repo, "tiles_dir": tiles_dir,
         "eval_fold": args.eval_fold, "lambda_adv": args.lambda_adv,
         "checkpoint": args.checkpoint, "backbone": binfo,
@@ -1057,6 +1260,35 @@ def main():
     Path(args.out).write_text(json.dumps(res, indent=2))
     print("\n" + to_markdown(res))
     print(f"\n[debias] wrote {args.out} ({res['elapsed_sec']}s)")
+
+    # Per-patient prediction dump for the paired bootstrap ----------------
+    # The runs above evaluate only the single --eval-fold (~1/5 of the cohort),
+    # which is what the --out JSON reports. For the dump we want EVERY cohort
+    # patient exactly once, so we re-evaluate the DEBIASED head out-of-fold on
+    # each held-out fold and concatenate (mirrors fairness_eval's internal-CV
+    # dump). --out above stays byte-identical.
+    if args.dump_predictions:
+        dump_lambda = args.lambda_adv if abs(args.lambda_adv) > 1e-12 else 0.0
+        all_folds = sorted(set(fold_of.values()))
+        log(f"[debias] dump: out-of-fold eval over folds {all_folds} "
+            f"(lambda={dump_lambda})")
+        records = []
+        for f in all_folds:
+            r = train_and_eval(
+                emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of, sens,
+                args.sensitive, f, dump_lambda, args.hidden, args.lr,
+                args.epochs, args.batch_size, device, method=args.method,
+                proto_temp=args.proto_temp, proto_ema=args.proto_ema,
+                race_weight=args.race_weight, dump_records=True,
+                condition_on_label=args.condition_on_label, log=log)
+            records.extend(r.get("predictions", []))
+        dpath = Path(args.dump_predictions)
+        dpath.parent.mkdir(parents=True, exist_ok=True)
+        with open(dpath, "w") as fh:
+            for rec in records:
+                fh.write(json.dumps(rec) + "\n")
+        print(f"[debias] dumped {len(records)} OOF per-patient predictions "
+              f"({len(all_folds)} folds) -> {dpath}")
 
     # Feature 2: optionally free the pulled HF tiles ----------------------
     if args.hf_clean and pulled_dir and os.path.isdir(pulled_dir):
