@@ -1,0 +1,252 @@
+--- a/train.py
++++ b/train.py
+@@ -42,6 +42,131 @@
+ 
+ # Prefix every console line with wall time and job/process id so SLURM logs are easy to scan.
+ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
++
++
++M3_OBJECTIVES = {
++    "contrastive-cancer",
++    "contrastive-demographics",
++    "contrastive-two-condition",
++    "fino",
++    "dann",
++    "pcgrad",
++}
++M3_DEMOGRAPHIC_FACTORS = {"race", "sex", "age"}
++
++
++def resolve_fino_objective(fino_cfg):
++    objective = fino_cfg.get("objective")
++    if objective:
++        return objective
++    method = fino_cfg.get("method", "fino")
++    if method == "contrastive":
++        return "contrastive-two-condition" if fino_cfg.get("contrastive_condition_on") else "contrastive-demographics"
++    return method
++
++
++def resolve_fino_meta_path(cfg):
++    data = cfg["data"]
++    if data.get("fino_meta_file"):
++        return Path(os.path.expandvars(data["fino_meta_file"]))
++    dataset_dir = Path(data["dataset_dir"])
++    nested = dataset_dir / "metadata" / "fino_meta.json"
++    return nested if nested.exists() else dataset_dir / "fino_meta.json"
++
++
++def validate_fino_config(cfg):
++    fino_cfg = cfg.get("fino") or {}
++    if not fino_cfg.get("enabled"):
++        return
++    explicit_objective = bool(fino_cfg.get("objective"))
++    objective = resolve_fino_objective(fino_cfg)
++    if objective not in M3_OBJECTIVES:
++        raise ValueError(f"fino.objective must be one of {sorted(M3_OBJECTIVES)}, got {objective!r}")
++    fino_cfg["objective"] = objective
++    expected_method = "contrastive" if objective.startswith("contrastive-") else objective
++    configured_method = fino_cfg.get("method", expected_method)
++    if configured_method != expected_method:
++        raise ValueError(
++            f"fino.objective={objective!r} requires fino.method={expected_method!r}, "
++            f"got {configured_method!r}"
++        )
++    fino_cfg["method"] = expected_method
++
++    discrete = fino_cfg.get("discrete", [])
++    continuous = fino_cfg.get("continuous", [])
++    selected = [f for f, _ in discrete + continuous]
++    duplicates = sorted({f for f in selected if selected.count(f) > 1})
++    if duplicates:
++        raise ValueError(f"metadata factors may be selected only once: {duplicates}")
++
++    meta_path = resolve_fino_meta_path(cfg)
++    if not meta_path.is_file():
++        raise FileNotFoundError(f"FINO metadata file does not exist: {meta_path}")
++    cfg["data"]["fino_meta_file"] = str(meta_path.resolve())
++    meta = json.loads(meta_path.read_text())
++    missing_discrete = sorted(
++        f for f, _ in discrete
++        if f not in meta.get("discrete", {}) or f not in meta.get("n", {})
++    )
++    missing_continuous = sorted(
++        f for f, _ in continuous
++        if f not in meta.get("continuous", {}) or f not in meta.get("cont_dim", {})
++    )
++    if missing_discrete or missing_continuous:
++        raise ValueError(
++            "configured metadata factors are missing from "
++            f"{meta_path}: discrete={missing_discrete}, continuous={missing_continuous}"
++        )
++    for f, _ in discrete:
++        nclasses = int(meta["n"][f])
++        labels = list(meta["discrete"][f].values())
++        if nclasses < 2 or any(not isinstance(v, int) or v < 0 or v >= nclasses for v in labels):
++            raise ValueError(f"invalid discrete metadata factor {f!r} in {meta_path}")
++    for f, _ in continuous:
++        if int(meta["cont_dim"][f]) < 1:
++            raise ValueError(f"invalid continuous metadata factor {f!r} in {meta_path}")
++
++    # Explicit M3 recipes get strict objective contracts; inferred legacy recipes
++    # retain their existing factor selections.
++    if explicit_objective:
++        signs = {f: float(sign) for f, sign in discrete + continuous}
++        negative = {f for f, sign in signs.items() if sign < 0}
++        factors = set(signs)
++        demographic = factors & M3_DEMOGRAPHIC_FACTORS
++        cancer_positive = signs.get("cancer", 0.0) > 0
++        if objective == "contrastive-cancer" and (factors != {"cancer"} or not cancer_positive):
++            raise ValueError("contrastive-cancer requires +cancer and no demographic-removal factors")
++        if objective in {"contrastive-demographics", "pcgrad"} and (
++            not demographic or factors != demographic or negative != demographic
++        ):
++            raise ValueError(f"{objective} requires demographic-removal factors only")
++        if objective in {"contrastive-two-condition", "fino", "dann"} and (
++            not cancer_positive
++            or not demographic
++            or factors != demographic | {"cancer"}
++            or negative != demographic
++        ):
++            raise ValueError(f"{objective} requires +cancer and at least one -demographic factor")
++        if objective == "contrastive-two-condition" and fino_cfg.get("contrastive_condition_on") != "cancer":
++            raise ValueError("contrastive-two-condition requires fino.contrastive_condition_on: cancer")
++
++    exclude_path = cfg["data"].get("exclude_barcodes_file")
++    excluded = (
++        {line.strip() for line in Path(exclude_path).read_text().splitlines() if line.strip()}
++        if exclude_path else set()
++    )
++    coverage = []
++    for f, _ in discrete:
++        keys = set(meta["discrete"][f])
++        coverage.append(f"{f}={len(keys - excluded):,}/{len(keys):,}")
++    for f, _ in continuous:
++        keys = set(meta["continuous"][f])
++        coverage.append(f"{f}={len(keys - excluded):,}/{len(keys):,}")
++    print(
++        f"{console_prefix()} Metadata  objective={objective} file={meta_path} "
++        f"coverage_after_exclude/total: {', '.join(coverage)}",
++        flush=True,
++    )
+ 
+ 
+ # Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
+@@ -66,6 +191,7 @@
+             f"`python prepare.py {cfg['config_path']} download=True`. Follow the data setup in "
+             f"README.md before launching train.py."
+         )
++    validate_fino_config(cfg)
+     return cfg
+ 
+ 
+@@ -246,6 +372,25 @@
+     return (per_anchor[valid] * wa).sum() / wa.sum().clamp(min=1e-12)
+ 
+ 
++def cancer_supcon(z, cancer, temp):
++    # Biology-only supervised contrastive control: same-cancer tiles are positives,
++    # all non-self tiles remain in the denominator, and no demographic labels enter.
++    n = z.shape[0]
++    if n < 2:
++        return z.new_zeros(())
++    sim = (z @ z.t()) / temp
++    self_mask = torch.eye(n, dtype=torch.bool, device=z.device)
++    sim = sim.masked_fill(self_mask, float("-inf"))
++    logprob = sim - torch.logsumexp(sim, dim=1, keepdim=True)
++    pos = (cancer[:, None] == cancer[None, :]) & ~self_mask
++    pos_count = pos.sum(1)
++    valid = pos_count > 0
++    if not bool(valid.any()):
++        return z.new_zeros(())
++    per_anchor = -(logprob.masked_fill(~pos, 0.0)).sum(1) / pos_count.clamp(min=1)
++    return per_anchor[valid].mean()
++
++
+ def pcgrad_project(g_main, g_dem, params):
+     # Fairness gradient projection (PCGrad variant). g_main/g_dem: per-parameter gradient lists (entries may be None)
+     # of the main SSL loss and the demographic-CE loss over `params`. If <g_main,g_dem> > 0 (descending g_main would
+@@ -281,11 +426,13 @@
+     fino_cfg = cfg["fino"] if (cfg.get("fino") or {}).get("enabled") else None
+     fino_disc = [(f, float(s)) for f, s in fino_cfg.get("discrete", [])] if fino_cfg else []
+     fino_cont = [(f, float(s)) for f, s in fino_cfg.get("continuous", [])] if fino_cfg else []
+-    fino_meta = json.loads((Path(cfg["data"]["dataset_dir"]) / "fino_meta.json").read_text()) if fino_cfg else {"n": {}, "cont_dim": {}}
++    fino_meta = json.loads(Path(cfg["data"]["fino_meta_file"]).read_text()) if fino_cfg else {"n": {}, "cont_dim": {}}
+     # Fairness method selector (reuses the fino: block so all metadata plumbing — dataloader labels, gamma ramp,
+     # meta tuple, optimizer/checkpoint wiring — is shared). "fino" (default): EMA prototype-bank cross-entropy.
+     # "dann": a learned linear adversary per discrete factor + gradient reversal; NO prototype bank. Continuous
+-    # factors (age) use the identical GRL+MLP regression branch under both methods.
++    # factors (age) use the same GRL+MLP regression branch for every non-PCGrad
++    # demographic-removing objective, and a plain regression gradient for PCGrad.
++    fairness_objective = resolve_fino_objective(fino_cfg) if fino_cfg else None
+     fairness_method = (fino_cfg.get("method", "fino") if fino_cfg else "fino")
+     # Contrastive-fairness hyperparams (method=contrastive): temperature + weight for the cross-demographic
+     # SupCon term added to meta_loss. Unused by fino/dann/pcgrad.
+@@ -625,28 +772,26 @@
+                             logits = adversaries[f](sg["x_norm_clstoken"].float()[ok])
+                             terms.append((f, F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))
+                         elif fairness_method == "contrastive":
+-                            # Cross-demographic supervised contrastive: DIFFERENT-demographic tiles are positives pulled
+-                            # together, removing demographic separability from the CLS features (see fair_supcon).
+-                            # When contrastive_condition_on is set, skip the conditioner factor itself and condition
+-                            # the contrastive loss on same-cancer tiles.
+-                            if cond_factor_col is not None and j == cond_factor_col:
+-                                continue  # conditioner is not a contrastive target
+-                            contrastive_cond = None
+-                            if cond_factor_col is not None:
++                            if fairness_objective == "contrastive-cancer":
++                                terms.append((f, contrastive_weight * cancer_supcon(
++                                    phi_s[ok], lab[ok], contrastive_temp
++                                )))
++                            elif fairness_objective == "contrastive-two-condition":
++                                if j == cond_factor_col:
++                                    continue
+                                 cond_label = md[:, cond_factor_col].repeat(train_cfg["global_views"])
+-                                cond_mask = cond_label >= 0
+-                                contrastive_cond = cond_label[ok & cond_mask] if (ok & cond_mask).any() else None
+-                                if contrastive_cond is not None:
+-                                    phi_s_use = phi_s[ok & cond_mask]
+-                                    lab_use = lab[ok & cond_mask]
+-                                else:
+-                                    phi_s_use = phi_s[ok]
+-                                    lab_use = lab[ok]
++                                both_known = ok & (cond_label >= 0)
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[both_known],
++                                    lab[both_known],
++                                    contrastive_temp,
++                                    w=race_weights.get(f),
++                                    cond=cond_label[both_known],
++                                )))
+                             else:
+-                                phi_s_use = phi_s[ok]
+-                                lab_use = lab[ok]
+-                            terms.append((f, contrastive_weight * fair_supcon(phi_s_use, lab_use, contrastive_temp,
+-                                                                              w=race_weights.get(f), cond=contrastive_cond)))
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[ok], lab[ok], contrastive_temp, w=race_weights.get(f)
++                                )))
+                         else:
+                             logits = (GradScale.apply(phi_s[ok], sign * gamma) @ protos[f].t()) / 0.023
+                             terms.append((f, 0.03 * F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))
+@@ -660,8 +805,6 @@
+                 # for the cosine discrete branch and it strips the radial magnitude). raw_cls=True feeds the raw CLS.
+                 cls_cont = sg["x_norm_clstoken"].float() if fino_cfg.get("raw_cls") else phi_s
+                 for f, sign in fino_cont:
+-                    if fairness_method == "contrastive":
+-                        continue  # contrastive fairness is defined on discrete class labels only
+                     val = mc[f].repeat(train_cfg["global_views"], 1); ok = ~torch.isnan(val).any(dim=1)
+                     if ok.any():
+                         if fairness_method == "pcgrad":
+--- a/dataloader.py
++++ b/dataloader.py
+@@ -161,7 +161,8 @@
+         # - suppress). Loaded once so DataLoader fork-workers share it copy-on-write; train.py masks absent ones.
+         self.fino = (cfg.get("fino") or {}).get("enabled")
+         if self.fino:
+-            meta = json.loads((dataset_dir / "fino_meta.json").read_text())
++            meta_path = Path(data.get("fino_meta_file", dataset_dir / "fino_meta.json"))
++            meta = json.loads(meta_path.read_text())
+             self.fino_disc = [f for f, _ in cfg["fino"].get("discrete", [])]
+             self.fino_cont = [f for f, _ in cfg["fino"].get("continuous", [])]
+             # tile_npy maps a discrete factor -> a per-TILE label .npy in shard-concat order (e.g. strong-FM cluster

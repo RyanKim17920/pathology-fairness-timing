@@ -1,0 +1,493 @@
+--- a/train.py
++++ b/train.py
+@@ -44,6 +44,97 @@
+ def console_prefix(): return f"{time.strftime('%H:%M:%S')} {os.environ.get('SLURM_JOB_ID', str(os.getpid()))}"
+ 
+ 
++M3_OBJECTIVES = {
++    "contrastive-cancer",
++    "contrastive-demographics",
++    "contrastive-two-condition",
++    "fino",
++    "dann",
++    "pcgrad",
++}
++
++
++def resolve_fino_objective(fino_cfg):
++    objective = fino_cfg.get("objective")
++    if objective:
++        return objective
++    method = fino_cfg.get("method", "fino")
++    if method == "contrastive":
++        return "contrastive-two-condition" if fino_cfg.get("contrastive_condition_on") else "contrastive-demographics"
++    return method
++
++
++def validate_fino_config(cfg):
++    """Validate every selected factor and the M3 objective before CUDA is initialized."""
++    fino_cfg = cfg.get("fino") or {}
++    if not fino_cfg.get("enabled"):
++        return
++
++    explicit_objective = bool(fino_cfg.get("objective"))
++    objective = resolve_fino_objective(fino_cfg)
++    if objective not in M3_OBJECTIVES:
++        raise ValueError(f"fino.objective must be one of {sorted(M3_OBJECTIVES)}, got {objective!r}")
++    fino_cfg["objective"] = objective
++    expected_method = "contrastive" if objective.startswith("contrastive-") else objective
++    method = fino_cfg.get("method", expected_method)
++    if method != expected_method:
++        raise ValueError(
++            f"fino.objective={objective!r} requires fino.method={expected_method!r}, got {method!r}"
++        )
++    fino_cfg["method"] = expected_method
++
++    discrete = [(f, float(sign)) for f, sign in fino_cfg.get("discrete", [])]
++    continuous = [(f, float(sign)) for f, sign in fino_cfg.get("continuous", [])]
++    selected = [f for f, _ in discrete + continuous]
++    duplicates = sorted({f for f in selected if selected.count(f) > 1})
++    if duplicates:
++        raise ValueError(f"metadata factors may be selected only once: {duplicates}")
++    zero_signs = sorted(f for f, sign in discrete + continuous if sign == 0)
++    if zero_signs:
++        raise ValueError(f"metadata factor signs must be non-zero: {zero_signs}")
++
++    meta_path = Path(cfg["data"]["dataset_dir"]) / "fino_meta.json"
++    if not meta_path.is_file():
++        raise ValueError(f"missing factor(s): {selected!r}; metadata file does not exist: {meta_path}")
++    meta = json.loads(meta_path.read_text())
++    missing = sorted({
++        *(
++            f for f, _ in discrete
++            if f not in meta.get("discrete", {}) or f not in meta.get("n", {})
++        ),
++        *(
++            f for f, _ in continuous
++            if f not in meta.get("continuous", {}) or f not in meta.get("cont_dim", {})
++        ),
++    })
++    if missing:
++        raise ValueError(f"missing factor(s): {missing}")
++    if objective.startswith("contrastive-"):
++        nonscalar = sorted(f for f, _ in continuous if int(meta["cont_dim"][f]) != 1)
++        if nonscalar:
++            raise ValueError(f"contrastive objectives require scalar continuous factor(s): {nonscalar}")
++
++    if explicit_objective:
++        positive = {f for f, sign in discrete + continuous if sign > 0}
++        negative = {f for f, sign in discrete + continuous if sign < 0}
++        cancer_positive = positive == {"cancer"} and any(f == "cancer" and sign > 0 for f, sign in discrete)
++        if objective == "contrastive-cancer":
++            if not cancer_positive or negative:
++                raise ValueError("contrastive-cancer requires discrete cancer:+1 and no demographic factors")
++        elif objective == "contrastive-demographics":
++            if positive or not negative:
++                raise ValueError("contrastive-demographics requires one or more negative-sign factor(s)")
++        else:
++            if not cancer_positive or not negative:
++                raise ValueError(f"{objective} requires discrete cancer:+1 and one or more negative-sign factor(s)")
++
++    if objective == "contrastive-two-condition" and explicit_objective:
++        condition = fino_cfg.get("contrastive_condition_on", "cancer")
++        if condition != "cancer":
++            raise ValueError("contrastive-two-condition requires cancer as its positive conditioning factor")
++        fino_cfg["contrastive_condition_on"] = condition
++
++
+ # Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
+ # expandvars is necessary to resolve `$USER` for checked-in configs.
+ def load_config():
+@@ -66,6 +157,7 @@
+             f"`python prepare.py {cfg['config_path']} download=True`. Follow the data setup in "
+             f"README.md before launching train.py."
+         )
++    validate_fino_config(cfg)
+     return cfg
+ 
+ 
+@@ -214,31 +306,35 @@
+         bt.copy_(bs)
+ 
+ 
+-def fair_supcon(z, y, temp, w=None, cond=None):
+-    # Fairness (cross-demographic) supervised contrastive loss. z: (N, D) L2-normalized CLS features; y: (N,) demographic
+-    # labels. Positives for anchor i are DIFFERENT-demographic tiles (y_j != y_i); the SupCon objective pulls them
+-    # together against all other tiles, so minimizing it destroys demographic cluster structure (the sensitive attribute
+-    # becomes non-separable in the representation). Anchors with no cross-demographic partner contribute nothing.
+-    # cond (optional): conditioning labels, e.g. cancer type. When set, positives are SAME-COND AND DIFFERENT-demographic
+-    # tiles. The denominator remains all non-self tiles, so different-cond/same-demo pairs stay in the denominator.
+-    # w (optional): per-class weight vector; when given, each valid anchor's contribution is scaled by w[y_i] so
+-    # minority-demographic anchors dominate the reduction (weighted mean). w=None reduces to the plain mean below.
++def fair_supcon(z, y, temp, relation="different", w=None, cond=None):
++    # Generic metadata SupCon over normalized z. "same" preserves a task factor (cancer);
++    # "different" removes a selected demographic factor; "same-condition-different"
++    # removes it within the selected task condition. Every relation keeps all non-self
++    # examples in the denominator, and anchors without positives are omitted.
+     n = z.shape[0]
+     if n < 2:
+-        return z.new_zeros(())
++        return z.sum() * 0.0
++    y = y.flatten()
+     sim = (z @ z.t()) / temp
+     self_mask = torch.eye(n, dtype=torch.bool, device=z.device)
+     sim = sim.masked_fill(self_mask, float("-inf"))
+     logdenom = torch.logsumexp(sim, dim=1, keepdim=True)
+     logprob = sim - logdenom
+-    if cond is not None:
++    if relation == "same":
++        pos = (y[:, None] == y[None, :]) & ~self_mask
++    elif relation == "different":
++        pos = (y[:, None] != y[None, :]) & ~self_mask
++    elif relation == "same-condition-different":
++        if cond is None:
++            raise ValueError("same-condition-different SupCon requires condition labels")
++        cond = cond.flatten()
+         pos = (cond[:, None] == cond[None, :]) & (y[:, None] != y[None, :]) & ~self_mask
+     else:
+-        pos = (y[:, None] != y[None, :]) & ~self_mask
++        raise ValueError(f"unknown SupCon relation: {relation!r}")
+     pos_count = pos.sum(1)
+     valid = pos_count > 0
+     if not bool(valid.any()):
+-        return z.new_zeros(())
++        return z.sum() * 0.0
+     per_anchor = -(logprob.masked_fill(~pos, 0.0)).sum(1) / pos_count.clamp(min=1)
+     if w is None:
+         return per_anchor[valid].mean()
+@@ -281,11 +377,18 @@
+     fino_cfg = cfg["fino"] if (cfg.get("fino") or {}).get("enabled") else None
+     fino_disc = [(f, float(s)) for f, s in fino_cfg.get("discrete", [])] if fino_cfg else []
+     fino_cont = [(f, float(s)) for f, s in fino_cfg.get("continuous", [])] if fino_cfg else []
++    task_disc = [(f, s) for f, s in fino_disc if s > 0]
++    demographic_disc = [(f, s) for f, s in fino_disc if s < 0]
++    task_cont = [(f, s) for f, s in fino_cont if s > 0]
++    demographic_cont = [(f, s) for f, s in fino_cont if s < 0]
++    task_factor_names = {f for f, _ in task_disc + task_cont}
++    demographic_factor_names = {f for f, _ in demographic_disc + demographic_cont}
+     fino_meta = json.loads((Path(cfg["data"]["dataset_dir"]) / "fino_meta.json").read_text()) if fino_cfg else {"n": {}, "cont_dim": {}}
+     # Fairness method selector (reuses the fino: block so all metadata plumbing — dataloader labels, gamma ramp,
+     # meta tuple, optimizer/checkpoint wiring — is shared). "fino" (default): EMA prototype-bank cross-entropy.
+-    # "dann": a learned linear adversary per discrete factor + gradient reversal; NO prototype bank. Continuous
+-    # factors (age) use the identical GRL+MLP regression branch under both methods.
++    # "dann": a learned linear adversary per discrete factor + gradient reversal; NO prototype bank.
++    # Continuous factors use the identical GRL+MLP regression branch under both methods.
++    fairness_objective = resolve_fino_objective(fino_cfg) if fino_cfg else None
+     fairness_method = (fino_cfg.get("method", "fino") if fino_cfg else "fino")
+     # Contrastive-fairness hyperparams (method=contrastive): temperature + weight for the cross-demographic
+     # SupCon term added to meta_loss. Unused by fino/dann/pcgrad.
+@@ -308,6 +411,11 @@
+     # Single-GPU assumption: these fairness runs are single-process (no DDP/DistributedSampler in this
+     # train.py), so the weighted sampler simply replaces shuffle without needing a distributed-aware wrapper.
+     race_resample = bool(fino_cfg.get("race_resample", False)) if fino_cfg else False
++    resample_factor = (
++        fino_cfg.get("resample_factor") or (demographic_disc[0][0] if demographic_disc else None)
++    ) if fino_cfg else None
++    if race_resample and resample_factor is None:
++        raise ValueError("fino.race_resample requires a negative-sign discrete factor")
+     # FINO two-phase: freeze the backbone (except patch_embed) for the first this-fraction of the run so the DINO/JEPA
+     # heads + metadata prototypes/predictors converge against a fixed target before they steer the encoder. 0 = off.
+     freeze_backbone_frac = float(dino_cfg.get("freeze_backbone_fraction", 0.0))
+@@ -376,21 +484,36 @@
+     # FINO grad-equalisation EMA bank (one running grad-norm per factor); init 1.0 -> s_t~1 early. Not checkpointed
+     # (mu=0.99 -> ~100-step memory, re-warms quickly on resume). Used only when fino.grad_equalize is set.
+     grad_eq_ema = {f: torch.ones((), device=device) for f, _ in (fino_disc + fino_cont)} if fino_cfg else {}
+-    # PCGrad fairness (method=pcgrad): SSL-trained params whose gradient gets projected, vs the demographic-classifier
+-    # params trained normally (no reversal). pcgrad_apply computes the two gradients and projects at the step site.
++    # PCGrad splits shared encoder/SSL parameters from preservation-task heads and
++    # demographic heads. The main gradient includes SSL + task-factor losses; only its
++    # shared portion is projected off the demographic gradient. Both head sets train normally.
+     # Filter to trainable params: DINOHead's weight-norm magnitude (last_layer...original0) is a registered but frozen
+     # (requires_grad=False) parameter; torch.autograd.grad rejects non-requiring inputs. Excluding it is a no-op
+     # mathematically (its gradient is zero) and avoids a RuntimeError at the first pcgrad step.
+     pcgrad_ssl_params = [p for p in (*student_backbone.parameters(), *student_dino_head.parameters(), *student_predictor.parameters()) if p.requires_grad]
+-    pcgrad_clf_params = [p for p in ([p for m in adversaries.values() for p in m.parameters()] + [p for m in predictors.values() for p in m.parameters()]) if p.requires_grad]
++    pcgrad_task_params = [
++        p for f, module in {**adversaries, **predictors}.items()
++        if f in task_factor_names for p in module.parameters() if p.requires_grad
++    ]
++    pcgrad_demographic_params = [
++        p for f, module in {**adversaries, **predictors}.items()
++        if f in demographic_factor_names for p in module.parameters() if p.requires_grad
++    ]
+     def pcgrad_apply(main_loss, dem_loss, verbose=False):
+-        g_main = torch.autograd.grad(main_loss, pcgrad_ssl_params, retain_graph=True, allow_unused=True)
+-        g_all = torch.autograd.grad(dem_loss, pcgrad_ssl_params + pcgrad_clf_params, allow_unused=True)
++        g_main_all = torch.autograd.grad(
++            main_loss, pcgrad_ssl_params + pcgrad_task_params, retain_graph=True, allow_unused=True
++        )
++        g_dem_all = torch.autograd.grad(
++            dem_loss, pcgrad_ssl_params + pcgrad_demographic_params, allow_unused=True
++        )
+         n_ssl = len(pcgrad_ssl_params)
+-        new_main, info = pcgrad_project(g_main, g_all[:n_ssl], pcgrad_ssl_params)
++        new_main, info = pcgrad_project(g_main_all[:n_ssl], g_dem_all[:n_ssl], pcgrad_ssl_params)
+         for p, g in zip(pcgrad_ssl_params, new_main):
+             p.grad = g
+-        for p, g in zip(pcgrad_clf_params, g_all[n_ssl:]):
++        for p, g in zip(pcgrad_task_params, g_main_all[n_ssl:]):
++            if g is not None:
++                p.grad = g
++        for p, g in zip(pcgrad_demographic_params, g_dem_all[n_ssl:]):
+             if g is not None:
+                 p.grad = g
+         if verbose:
+@@ -521,7 +644,7 @@
+     # otherwise train_sampler stays None and the loader keeps shuffle=True (byte-identical default path).
+     train_sampler = None
+     if race_resample:
+-        race_w = train_ds.race_sample_weights("race")
++        race_w = train_ds.factor_sample_weights(resample_factor)
+         train_sampler = WeightedRandomSampler(race_w, num_samples=len(train_ds), replacement=True)
+         print(f"{console_prefix()} [race_resample] weighted sampler over {len(train_ds)} tiles "
+               f"(w min/mean/max={race_w.min():.4f}/{race_w.mean():.4f}/{race_w.max():.4f})", flush=True)
+@@ -601,7 +724,8 @@
+         # per-factor sign (+ M+ encourage / - M- suppress). fp32 island (1/tau=0.023 too sharp for bf16); missing
+         # factors masked. Discrete: L2-normed student CLS vs EMA prototype bank (clone-rebind keeps the backward-saved
+         # bank valid). Continuous: an MLP regresses the z-scored value.
+-        meta_loss = sg["x_norm_clstoken"].new_zeros(())
++        meta_task_loss = sg["x_norm_clstoken"].sum() * 0.0
++        meta_demographic_loss = sg["x_norm_clstoken"].sum() * 0.0
+         if meta is not None:
+             gamma, md, mc = meta  # md (B,n_disc) int64 (-1 missing); mc {factor: (B,dim) float, nan missing}
+             phi_s = F.normalize(sg["x_norm_clstoken"].float(), dim=-1)
+@@ -612,41 +736,41 @@
+                     lab = md[:, j].repeat(train_cfg["global_views"]); ok = lab >= 0  # repeat, NOT interleave
+                     if ok.any():
+                         if fairness_method == "dann":
+-                            # DANN: a learned linear adversary predicts the attribute from the RAW student CLS; the
+-                            # GradScale reverses the encoder gradient (sign*gamma; fairness sign=-1 -> -gamma), so the
+-                            # head is trained to classify the attribute while the encoder is pushed to unlearn it. Same
+-                            # sigmoid gamma ramp and missing-label mask (ok) as FINO; no prototype bank / no EMA update.
+-                            logits = adversaries[f](GradScale.apply(sg["x_norm_clstoken"].float()[ok], sign * gamma))
++                            # Preservation/task factors use an ordinary, unscaled encoder gradient.
++                            # Demographic factors use GRL(-gamma); head gradients are normal in both cases.
++                            encoder_scale = 1.0 if f in task_factor_names else -gamma
++                            logits = adversaries[f](GradScale.apply(
++                                sg["x_norm_clstoken"].float()[ok], encoder_scale
++                            ))
+                             terms.append((f, 0.03 * F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))
+                         elif fairness_method == "pcgrad":
+-                            # PCGrad: plain demographic CE from a learned classifier on the RAW student CLS, NO gradient
+-                            # reversal. This term is returned as meta_loss but the pcgrad step site does NOT add it to
+-                            # total_loss; it uses this gradient to project the SSL gradient (see pcgrad_apply).
++                            # PCGrad: plain factor CE on RAW student CLS, with no reversal. Positive-sign
++                            # task terms join the main loss; negative-sign terms provide the projection direction.
+                             logits = adversaries[f](sg["x_norm_clstoken"].float()[ok])
+                             terms.append((f, F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))
+                         elif fairness_method == "contrastive":
+-                            # Cross-demographic supervised contrastive: DIFFERENT-demographic tiles are positives pulled
+-                            # together, removing demographic separability from the CLS features (see fair_supcon).
+-                            # When contrastive_condition_on is set, skip the conditioner factor itself and condition
+-                            # the contrastive loss on same-cancer tiles.
+-                            if cond_factor_col is not None and j == cond_factor_col:
+-                                continue  # conditioner is not a contrastive target
+-                            contrastive_cond = None
+-                            if cond_factor_col is not None:
++                            if fairness_objective == "contrastive-cancer":
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[ok], lab[ok], contrastive_temp, relation="same"
++                                )))
++                            elif fairness_objective == "contrastive-two-condition":
++                                if f in task_factor_names:
++                                    continue
+                                 cond_label = md[:, cond_factor_col].repeat(train_cfg["global_views"])
+-                                cond_mask = cond_label >= 0
+-                                contrastive_cond = cond_label[ok & cond_mask] if (ok & cond_mask).any() else None
+-                                if contrastive_cond is not None:
+-                                    phi_s_use = phi_s[ok & cond_mask]
+-                                    lab_use = lab[ok & cond_mask]
+-                                else:
+-                                    phi_s_use = phi_s[ok]
+-                                    lab_use = lab[ok]
++                                both_known = ok & (cond_label >= 0)
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[both_known],
++                                    lab[both_known],
++                                    contrastive_temp,
++                                    relation="same-condition-different",
++                                    w=race_weights.get(f),
++                                    cond=cond_label[both_known],
++                                )))
+                             else:
+-                                phi_s_use = phi_s[ok]
+-                                lab_use = lab[ok]
+-                            terms.append((f, contrastive_weight * fair_supcon(phi_s_use, lab_use, contrastive_temp,
+-                                                                              w=race_weights.get(f), cond=contrastive_cond)))
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[ok], lab[ok], contrastive_temp,
++                                    relation="different", w=race_weights.get(f)
++                                )))
+                         else:
+                             logits = (GradScale.apply(phi_s[ok], sign * gamma) @ protos[f].t()) / 0.023
+                             terms.append((f, 0.03 * F.cross_entropy(logits, lab[ok], weight=race_weights.get(f))))
+@@ -660,15 +784,32 @@
+                 # for the cosine discrete branch and it strips the radial magnitude). raw_cls=True feeds the raw CLS.
+                 cls_cont = sg["x_norm_clstoken"].float() if fino_cfg.get("raw_cls") else phi_s
+                 for f, sign in fino_cont:
+-                    if fairness_method == "contrastive":
+-                        continue  # contrastive fairness is defined on discrete class labels only
+                     val = mc[f].repeat(train_cfg["global_views"], 1); ok = ~torch.isnan(val).any(dim=1)
+                     if ok.any():
+-                        if fairness_method == "pcgrad":
++                        if fairness_method == "contrastive":
++                            if fairness_objective == "contrastive-two-condition":
++                                cond_label = md[:, cond_factor_col].repeat(train_cfg["global_views"])
++                                both_known = ok & (cond_label >= 0)
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[both_known],
++                                    val[both_known],
++                                    contrastive_temp,
++                                    relation="same-condition-different",
++                                    cond=cond_label[both_known],
++                                )))
++                            else:
++                                terms.append((f, contrastive_weight * fair_supcon(
++                                    phi_s[ok], val[ok], contrastive_temp, relation="different"
++                                )))
++                        elif fairness_method == "pcgrad":
+                             cpred = predictors[f](cls_cont[ok])  # NO reversal: continuous demographic-prediction gradient
+                             terms.append((f, F.mse_loss(cpred, val[ok])))
+                         else:
+-                            cpred = predictors[f](GradScale.apply(cls_cont[ok], sign * gamma))
++                            encoder_scale = (
++                                1.0 if fairness_method == "dann" and f in task_factor_names
++                                else (-gamma if fairness_method == "dann" else sign * gamma)
++                            )
++                            cpred = predictors[f](GradScale.apply(cls_cont[ok], encoder_scale))
+                             terms.append((f, 0.03 * F.mse_loss(cpred, val[ok])))
+                 # FINO Alg A.3 per-branch gradient equalisation: rescale each branch by n_bar/EMA(||dL_t/dCLS||) so the
+                 # discrete-CE and continuous-MSE gradients reach the encoder at matched magnitudes (detached -> reweight
+@@ -677,10 +818,15 @@
+                     g = {f: torch.autograd.grad(L, sg["x_norm_clstoken"], retain_graph=True)[0].norm() for f, L in terms}
+                     for f in g: grad_eq_ema[f] = 0.99 * grad_eq_ema[f] + 0.01 * g[f].detach().float()
+                     nbar = torch.exp(torch.stack([grad_eq_ema[f].log() for f, _ in terms]).mean())
+-                    meta_loss = sum((nbar / grad_eq_ema[f]).detach() * L for f, L in terms)
++                    scaled_terms = [(f, (nbar / grad_eq_ema[f]).detach() * L) for f, L in terms]
+                 else:
+-                    for _, L in terms: meta_loss = meta_loss + L
+-        return local_loss + global_loss, jepa_loss, kde, meta_loss
++                    scaled_terms = terms
++                for f, loss in scaled_terms:
++                    if f in task_factor_names:
++                        meta_task_loss = meta_task_loss + loss
++                    else:
++                        meta_demographic_loss = meta_demographic_loss + loss
++        return local_loss + global_loss, jepa_loss, kde, meta_task_loss, meta_demographic_loss
+ 
+     # Held-out validation pass: same DINO + JEPA + KDE losses on `val_batches` of the val split.
+     # Schedule terms (teacher_temp, kde_scale) drift over training, so read val curves as same-step
+@@ -701,7 +847,9 @@
+             with torch.no_grad(), autocast:
+                 gf, lf = vg.transpose(0, 1).flatten(0, 1), vl.transpose(0, 1).flatten(0, 1)
+                 masks, mask_idx, mask_w = make_block_mask(b * train_cfg["global_views"], global_grid, device, n_blocks=int(dino_cfg["jepa_blocks"]), block_scale=float(dino_cfg["jepa_block_scale"]))
+-                dino_l, jepa_l, kde_v, _ = compute_losses(gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale)
++                dino_l, jepa_l, kde_v, _, _ = compute_losses(
++                    gf, lf, b, masks, mask_idx, mask_w, eval_teacher_temp, eval_kde_scale
++                )
+             sums += torch.tensor([float(dino_l), float(jepa_l), float(kde_v), float(dino_l + jepa_l + kde_v)], device=device)
+             n_batches += 1
+         random.setstate(py_rng)
+@@ -824,19 +972,20 @@
+                              batch["meta_disc"].to(device, non_blocking=True),
+                              {f: batch["mc_" + f].to(device, non_blocking=True) for f, _ in fino_cont}) if fino_cfg else None)
+                     cond = batch["meta_disc"][:, cond_col].repeat(train_cfg["global_views"]).to(device, non_blocking=True) if jepa_cond else None
+-                    dino_loss_value, jepa_loss, kde, meta_loss = compute_losses(
++                    dino_loss_value, jepa_loss, kde, meta_task_loss, meta_demographic_loss = compute_losses(
+                         gf, lf, batch_size, masks, mask_idx, mask_w, teacher_temp, kde_scale,
+                         ckpt=activation_checkpointing, meta=meta, cond=cond,
+                     )
+-                    total_loss = dino_loss_value + jepa_loss + kde + meta_loss
++                    main_loss = dino_loss_value + jepa_loss + kde + meta_task_loss
++                    total_loss = main_loss + meta_demographic_loss
+                 if fwd_ctx is not None:
+                     # Close the forward-only counter before autograd.grad() runs (pcgrad path).
+                     fwd_ctx.__exit__(None, None, None)
+                 if fairness_method == "pcgrad" and meta is not None:
+-                    # PCGrad fairness: no single total_loss.backward(). Get the main SSL gradient and the demographic
+-                    # gradient separately, project the former onto the orthogonal complement of the latter, then apply.
++                    # The cancer task CE is part of main_loss. Project only the shared
++                    # SSL/task gradient off the demographic gradient; both head sets train normally.
+                     opt.zero_grad(set_to_none=True)
+-                    pcgrad_apply(dino_loss_value + jepa_loss + kde, meta_loss)
++                    pcgrad_apply(main_loss, meta_demographic_loss)
+                 else:
+                     opt.zero_grad(set_to_none=True)
+                     total_loss.backward()
+--- a/dataloader.py
++++ b/dataloader.py
+@@ -169,7 +169,7 @@
+             tile_npy = cfg["fino"].get("tile_npy", {})
+             self.meta_disc = {f: meta["discrete"][f] for f in self.fino_disc if f not in tile_npy}
+             # Placebo demographics (fino.permute_labels): when set to an int seed, RANDOMLY PERMUTE the
+-            # per-patient DEMOGRAPHIC discrete-factor labels (race, sex ONLY) across patients, so the
++            # per-patient negative-sign discrete factors selected by the config, so the
+             # fairness objective trains to be invariant to a demographic signal that is pure NOISE. Values
+             # are re-assigned among the SAME barcodes, so each factor's marginal label distribution (and
+             # thus train.py's inverse-freq race_weights, computed from fino_meta directly) is preserved;
+@@ -179,9 +179,11 @@
+             # dataset instances (same barcode keys from fino_meta) receive the identical permutation.
+             permute_seed = (cfg.get("fino") or {}).get("permute_labels")
+             if permute_seed is not None:
+-                _DEMOGRAPHIC_FACTORS = ("race", "sex")
++                demographic_factors = {
++                    f for f, sign in cfg["fino"].get("discrete", []) if float(sign) < 0
++                }
+                 _rng = np.random.default_rng(int(permute_seed))
+-                for f in sorted(k for k in self.meta_disc if k in _DEMOGRAPHIC_FACTORS):
++                for f in sorted(k for k in self.meta_disc if k in demographic_factors):
+                     m = self.meta_disc[f]
+                     keys = list(m.keys())
+                     vals = [m[k] for k in keys]
+@@ -228,37 +230,37 @@
+     def __len__(self):
+         return int(self.shard_of.shape[0])
+ 
+-    # Per-tile sampling weights for a race-balanced torch WeightedRandomSampler (fino.race_resample).
+-    # WEIGHT RULE: weight_i = 1 / n_tiles(race class of tile i) for tiles with a KNOWN race class, so
+-    # every race class receives equal total sampling mass -> in expectation the sampler draws race
+-    # classes uniformly (minority races White~82%/Black~10%/Asian~7% oversampled toward parity).
+-    # MISSING RACE (id < 0, incl. barcodes absent from the map): assigned the MEAN present-tile weight,
++    # Per-tile sampling weights for a config-selected negative-sign factor.
++    # WEIGHT RULE: weight_i = 1 / n_tiles(class of tile i) for tiles with a KNOWN class, so
++    # every class receives equal total sampling mass -> in expectation the sampler draws
++    # classes uniformly.
++    # MISSING FACTOR (id < 0, incl. barcodes absent from the map): assigned the MEAN present-tile weight,
+     # i.e. sampled at the average per-tile rate -- neither promoted nor suppressed -- so unlabeled tiles
+     # keep participating without distorting the balance among labeled tiles. The vector is scaled to
+     # mean 1.0 (WeightedRandomSampler only uses weight ratios). Mirrors __getitem__'s label source:
+     # a per-tile tile_npy label if present, else the per-barcode meta_disc map. Returns a float64
+     # torch tensor of length len(self). Requires the dataset to have been built with race_resample=True.
+-    def race_sample_weights(self, factor="race"):
++    def factor_sample_weights(self, factor):
+         n = len(self)
+         if not getattr(self, "fino", False):
+-            raise ValueError("race_sample_weights requires fino.enabled=True")
++            raise ValueError("factor_sample_weights requires fino.enabled=True")
+         if factor in getattr(self, "tile_label", {}):
+-            race_ids = np.asarray(self.tile_label[factor], dtype=np.int64)
++            factor_ids = np.asarray(self.tile_label[factor], dtype=np.int64)
+         else:
+             if self._tile_barcodes is None:
+-                raise ValueError("race_sample_weights requires fino.race_resample=True (per-tile barcodes not retained)")
++                raise ValueError("factor_sample_weights requires fino.race_resample=True (per-tile barcodes not retained)")
+             m = self.meta_disc[factor]
+-            race_ids = np.fromiter((int(m.get(bc, -1)) for bc in self._tile_barcodes), dtype=np.int64, count=n)
+-        present = race_ids >= 0
++            factor_ids = np.fromiter((int(m.get(bc, -1)) for bc in self._tile_barcodes), dtype=np.int64, count=n)
++        present = factor_ids >= 0
+         weights = np.zeros(n, dtype=np.float64)
+         if present.any():
+-            classes, counts = np.unique(race_ids[present], return_counts=True)
++            classes, counts = np.unique(factor_ids[present], return_counts=True)
+             cls_w = {int(c): 1.0 / int(cnt) for c, cnt in zip(classes.tolist(), counts.tolist())}
+-            weights[present] = np.array([cls_w[int(c)] for c in race_ids[present]], dtype=np.float64)
++            weights[present] = np.array([cls_w[int(c)] for c in factor_ids[present]], dtype=np.float64)
+             mean_present = float(weights[present].mean())
+         else:
+             mean_present = 1.0
+-        weights[~present] = mean_present  # missing race -> average per-tile sampling rate
++        weights[~present] = mean_present  # missing factor -> average per-tile sampling rate
+         total = weights.sum()
+         if total > 0:
+             weights *= n / total  # scale to mean 1.0 (ratios, hence the sampler, unchanged)

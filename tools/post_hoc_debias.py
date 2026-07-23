@@ -93,6 +93,8 @@ TASK_COHORT = {
     "brca_tp53":  "cptac_brca",   # TP53 status  -> breast   (not yet in repo)
     "ucec_tp53":  "cptac_ucec",   # TP53 status  -> uterine  (not yet in repo)
     "coad_tp53":  "cptac_coad",   # TP53 status  -> colon    (not yet in repo)
+    "luad_tp53":  "cptac_lung",   # TP53 status  -> lung     (in repo)
+    "coad_stage": "cptac_coad",   # AJCC stage   -> colon    (not yet in repo)
     "lihc_grade": "cptac_hcc",    # tumor grade  -> liver/HCC(not yet in repo)
     "nsclc":      "cptac_lung",   # NSCLC subtype-> lung      (in repo)
     "glioma":     "cptac_gbm",    # glioma       -> GBM       (in repo)
@@ -137,7 +139,7 @@ def _build_grl():
 
 # ============================================================== head + adversary
 def build_head(in_dim, hidden, sensitive, dropout=0.1, method="dann",
-               proto_temp=0.1, proto_ema=0.9):
+               proto_temp=0.1, proto_ema=0.9, condition_on_label=False):
     """Shared task branch (Linear1 -> h -> Linear2 -> task logit) with a
     selectable demographic branch off ``GRL(h)``:
       * method="dann" : a learned CE MLP adversary (original behavior).
@@ -146,7 +148,10 @@ def build_head(in_dim, hidden, sensitive, dropout=0.1, method="dann",
                         logits are prototype comparisons
                         ``logits = GRL(h_norm) @ proto_norm.T / temp`` -- no
                         learned linear head; the GRL drives h to be NOT
-                        clusterable by the demographic prototypes."""
+                        clusterable by the demographic prototypes.
+    With ``condition_on_label``, DANN uses a separate adversary and FINO a
+    separate prototype bank for each binary outcome-label stratum. The original
+    marginal modules remain available for matched-pool tiles whose y is unknown."""
     torch = _torch()
     import torch.nn as nn
     import torch.nn.functional as F
@@ -165,66 +170,158 @@ def build_head(in_dim, hidden, sensitive, dropout=0.1, method="dann",
             self.method = method
             self.proto_temp = float(proto_temp)
             self.proto_ema = float(proto_ema)
+            self.condition_on_label = bool(condition_on_label)
             if method == "dann":
                 self.adv = nn.ModuleDict({
                     a: nn.Sequential(nn.Linear(hidden, hidden), nn.ReLU(),
                                      nn.Linear(hidden, len(ATTR_CLASSES[a])))
                     for a in attrs
                 })
+                if self.condition_on_label:
+                    self.adv_by_y = nn.ModuleDict({
+                        a: nn.ModuleList([
+                            nn.Sequential(nn.Linear(hidden, hidden), nn.ReLU(),
+                                          nn.Linear(hidden, len(ATTR_CLASSES[a])))
+                            for _ in range(2)
+                        ])
+                        for a in attrs
+                    })
             else:  # fino: prototype banks are BUFFERS (EMA-updated, no grad)
                 for a in attrs:
                     n = len(ATTR_CLASSES[a])
                     self.register_buffer(f"proto_{a}", torch.zeros(n, hidden))
                     self.register_buffer(f"proto_init_{a}",
                                          torch.zeros(n, dtype=torch.bool))
+                    if method == "fino" and self.condition_on_label:
+                        self.register_buffer(f"proto_by_y_{a}",
+                                             torch.zeros(2, n, hidden))
+                        self.register_buffer(
+                            f"proto_by_y_init_{a}",
+                            torch.zeros(2, n, dtype=torch.bool))
             if method == "pcgrad":   # aux CE demographic head (NO gradient reversal)
                 self.demo = nn.ModuleDict({
                     a: nn.Sequential(nn.Linear(hidden, hidden), nn.ReLU(),
                                      nn.Linear(hidden, len(ATTR_CLASSES[a])))
                     for a in attrs
                 })
+                if self.condition_on_label:
+                    self.demo_by_y = nn.ModuleDict({
+                        a: nn.ModuleList([
+                            nn.Sequential(nn.Linear(hidden, hidden), nn.ReLU(),
+                                          nn.Linear(hidden, len(ATTR_CLASSES[a])))
+                            for _ in range(2)
+                        ])
+                        for a in attrs
+                    })
 
         def features(self, x):
             return self.drop(self.act(self.lin1(x)))
 
+        def _conditional_logits(self, heads, h, task_labels,
+                                marginal_heads=None):
+            """Route labeled tiles through their outcome-y demographic head.
+            If a mixed batch contains matched-pool tiles (y=-1), route only
+            those tiles through the original marginal head."""
+            row = torch.arange(h.shape[0], device=h.device)
+            yidx = task_labels.clamp(min=0, max=1)
+            out = {}
+            for a in self.attrs:
+                by_y = torch.stack(
+                    [heads[a][y](h) for y in range(2)], dim=1)
+                logits = by_y[row, yidx]
+                if marginal_heads is not None and bool((task_labels < 0).any()):
+                    marginal = marginal_heads[a](h)
+                    logits = torch.where(
+                        (task_labels >= 0).unsqueeze(1), logits, marginal)
+                out[a] = logits
+            return out
+
+        def demographic_logits(self, h, task_labels=None):
+            """PCGrad demographic logits, optionally from per-y heads."""
+            if self.condition_on_label and task_labels is not None:
+                return self._conditional_logits(
+                    self.demo_by_y, h, task_labels, self.demo)
+            return {a: self.demo[a](h) for a in self.attrs}
+
         @torch.no_grad()
-        def update_prototypes(self, h, labels):
+        def update_prototypes(self, h, labels, task_labels=None):
             """EMA-update each demographic prototype toward the mean (normalized)
             hidden vector of tiles carrying that class label. Detached: the bank
             is a target, not a trained parameter."""
             hd = h.detach()
             for a in self.attrs:
+                hda = hd
+                lab = labels[a]
+                if self.condition_on_label and task_labels is not None:
+                    proto = getattr(self, f"proto_by_y_{a}")       # [2,C,H]
+                    init = getattr(self, f"proto_by_y_init_{a}")   # [2,C]
+                    for y in range(proto.shape[0]):
+                        for c in range(proto.shape[1]):
+                            m = (task_labels == y) & (lab == c)
+                            if bool(m.any()):
+                                mu = F.normalize(hd[m].mean(0), dim=0, eps=1e-6)
+                                if bool(init[y, c]):
+                                    proto[y, c].mul_(self.proto_ema).add_(
+                                        mu, alpha=1.0 - self.proto_ema)
+                                else:
+                                    proto[y, c].copy_(mu); init[y, c] = True
+                    marginal = task_labels < 0
+                    if not bool(marginal.any()):
+                        continue
+                    hda = hd[marginal]
+                    lab = lab[marginal]
                 proto = getattr(self, f"proto_{a}")       # [C, hidden]
                 init = getattr(self, f"proto_init_{a}")   # [C] bool
-                lab = labels[a]
                 for c in range(proto.shape[0]):
                     m = lab == c
                     if bool(m.any()):
-                        mu = F.normalize(hd[m].mean(0), dim=0, eps=1e-6)
+                        mu = F.normalize(hda[m].mean(0), dim=0, eps=1e-6)
                         if bool(init[c]):
                             proto[c].mul_(self.proto_ema).add_(
                                 mu, alpha=1.0 - self.proto_ema)
                         else:
                             proto[c].copy_(mu); init[c] = True
 
-        def forward(self, x, lambd, labels=None):
+        def forward(self, x, lambd, labels=None, task_labels=None):
             h = self.features(x)
             task_logit = self.task_head(h).squeeze(-1)
             if self.method in ("contrastive", "pcgrad"):
                 # trunk-level methods: no GRL/prototype branch. pcgrad exposes an
                 # aux (non-reversed) demo head; contrastive has no demo module.
                 if self.method == "pcgrad":
-                    return task_logit, {a: self.demo[a](h) for a in self.attrs}
+                    return task_logit, self.demographic_logits(h, task_labels)
                 return task_logit, {}
             if self.method == "fino" and self.training and labels is not None:
-                self.update_prototypes(h, labels)         # refresh bank from THIS h
+                self.update_prototypes(h, labels, task_labels)
             r = grl.apply(h, lambd)                        # gradient-reversed h
             if self.method == "dann":
-                adv_logits = {a: self.adv[a](r) for a in self.attrs}
+                if self.condition_on_label and task_labels is not None:
+                    adv_logits = self._conditional_logits(
+                        self.adv_by_y, r, task_labels, self.adv)
+                else:
+                    adv_logits = {a: self.adv[a](r) for a in self.attrs}
             else:                                          # prototype comparison
                 rn = F.normalize(r, dim=1, eps=1e-6)
                 adv_logits = {}
                 for a in self.attrs:
+                    if self.condition_on_label and task_labels is not None:
+                        proto_by_y = F.normalize(
+                            getattr(self, f"proto_by_y_{a}"),
+                            dim=2, eps=1e-6)
+                        selected = proto_by_y[
+                            task_labels.clamp(min=0, max=1)]  # [B,C,hidden]
+                        logits = (
+                            rn.unsqueeze(1) * selected).sum(2) / self.proto_temp
+                        if bool((task_labels < 0).any()):
+                            proto = F.normalize(
+                                getattr(self, f"proto_{a}"),
+                                dim=1, eps=1e-6)
+                            marginal = (rn @ proto.t()) / self.proto_temp
+                            logits = torch.where(
+                                (task_labels >= 0).unsqueeze(1),
+                                logits, marginal)
+                        adv_logits[a] = logits
+                        continue
                     proto = F.normalize(getattr(self, f"proto_{a}"),
                                         dim=1, eps=1e-6)
                     adv_logits[a] = (rn @ proto.t()) / self.proto_temp
@@ -244,14 +341,28 @@ def build_task_cohort(task, demo, mol, fold_col_arg, label_col_arg=None, log=pri
     label_of, fold_of = {}, {}
 
     # (label_source, label_col, default_fold_col, cohort_rule)
-    if task in ("brca_tp53", "ucec_tp53", "coad_tp53"):
+    if task in ("brca_tp53", "ucec_tp53", "coad_tp53", "luad_tp53"):
         fold_col = fold_col_arg or ("fold_tp53_brca" if task == "brca_tp53"
                                     else "fold_tp53_ucec" if task == "ucec_tp53"
-                                    else "fold_tp53_coad")
+                                    else "fold_tp53_coad" if task == "coad_tp53"
+                                    else "fold_tp53_luad")
         for bc, m in mol.items():
             if _clean(m.get(fold_col)) and _clean(m.get("tp53_status")):
                 label_of[bc] = int(float(m["tp53_status"]))
                 fold_of[bc] = int(float(m[fold_col]))
+    elif task == "coad_stage":
+        # COAD early (0) vs late (1) AJCC stage; no dedicated stage-fold
+        # column, so the deterministic StratifiedKFold below supplies folds.
+        for bc, m in mol.items():
+            d = demo.get(bc, {})
+            if (_clean(m.get("stage_bin"))
+                    and str(d.get("cancer_type", "")).upper() == "COAD"):
+                label_of[bc] = int(float(m["stage_bin"]))
+        fold_col = fold_col_arg
+        if fold_col:
+            for bc in list(label_of):
+                if _clean(mol.get(bc, {}).get(fold_col)):
+                    fold_of[bc] = int(float(mol[bc][fold_col]))
     elif task == "lihc_grade":
         # no dedicated grade-fold column -> KFold below; cohort = LIHC & graded
         for bc, m in mol.items():
@@ -413,6 +524,19 @@ def collect_tiles(tiles_dir, task_cohort, sens, sensitive, adversary_data,
 
 
 # ============================================================== per-tile embed (cached)
+def checkpoint_cache_identity(checkpoint):
+    """Stable, cheap identity for the exact checkpoint used to embed tiles."""
+    if not checkpoint:
+        return "checkpoint=random-init"
+    resolved = Path(checkpoint).expanduser().resolve()
+    try:
+        stat = resolved.stat()
+        content_signature = f"size={stat.st_size}|mtime_ns={stat.st_mtime_ns}"
+    except OSError:
+        content_signature = "missing"
+    return f"checkpoint_path={resolved}|{content_signature}"
+
+
 def embed_tiles(model, mean, std, device, tiles, batch_size, log=print):
     """tiles: list of (barcode, jpeg). Returns (emb[N,D] float32, keep_mask).
     Uses probe.py's exact CLS path via model.probe_features (no pooling)."""
@@ -453,7 +577,7 @@ def cached_embed(tag, tiles, embed_fn, cache_dir, log=print):
     """Cache per-tile embeddings to an .npz keyed by `tag` (config hash + set)."""
     if not tiles:
         return np.zeros((0, 0), dtype=np.float32), np.asarray([], dtype=object)
-    key = hashlib.md5((tag + f"|n={len(tiles)}").encode()).hexdigest()[:16]
+    key = hashlib.sha256((tag + f"|n={len(tiles)}").encode()).hexdigest()
     path = os.path.join(cache_dir, f"emb_{tag.split('|')[0]}_{key}.npz")
     barcodes = np.asarray([bc for bc, _ in tiles], dtype=object)
     if os.path.exists(path):
@@ -515,6 +639,8 @@ def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None,
     same-demographic tiles apart), so ``h`` becomes NOT separable by the sensitive
     attribute. Summed (mean) across sensitive attrs; tiles with a missing label
     (idx < 0) are excluded from both anchors and positives. temperature-scaled.
+    When ``task_labels`` is given, positives must additionally have the same y;
+    the full-minibatch similarity denominator is unchanged.
 
     Feature 1: when ``weights`` is given ({attr: FloatTensor[C]}), each ANCHOR is
     reweighted by the inverse-frequency weight of its own demographic class, so
@@ -541,7 +667,14 @@ def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None,
         rows = valid & (pos_cnt > 0)
         if int(rows.sum()) == 0:
             continue
-        mean_logp_pos = (logp * pos).sum(1)[rows] / pos_cnt[rows].clamp(min=1)
+        if task_labels is not None:
+            # The diagonal of logp is -inf; mask before reduction so a false
+            # positive does not create NaN via 0 * -inf in the conditioned path.
+            mean_logp_pos = (
+                logp.masked_fill(~pos, 0.0).sum(1)[rows]
+                / pos_cnt[rows].clamp(min=1))
+        else:
+            mean_logp_pos = (logp * pos).sum(1)[rows] / pos_cnt[rows].clamp(min=1)
         per_anchor = -mean_logp_pos
         if weights is not None:
             wrow = weights[a][lab[rows]]               # inv-freq weight per anchor
@@ -652,7 +785,8 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
     n_task = Xtr.shape[0]
     n_adv = n_task + (Xpool.shape[0] if has_pool else 0)
 
-    model = build_head(D, hidden, sensitive, method=method).to(device)
+    model = build_head(D, hidden, sensitive, method=method,
+                       condition_on_label=condition_on_label).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     bce = nn.BCEWithLogitsLoss()
     ce = nn.CrossEntropyLoss(ignore_index=-1)
@@ -665,7 +799,10 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
 
     trunk_params = list(model.lin1.parameters())        # shared: encoder -> h
     task_params = list(model.task_head.parameters())
-    demo_params = list(model.demo.parameters()) if method == "pcgrad" else []
+    demo_params = (
+        list(model.demo_by_y.parameters())
+        if method == "pcgrad" and condition_on_label
+        else list(model.demo.parameters()) if method == "pcgrad" else [])
     cos_pre, cos_post = [], []
 
     model.train()
@@ -693,7 +830,8 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
                 opt.zero_grad(); task_loss.backward(); opt.step()
 
             else:                                        # pcgrad projection step
-                demo_logits = {a: model.demo[a](h) for a in attrs}
+                demo_logits = model.demographic_logits(
+                    h, ytr_long[idx] if condition_on_label else None)
                 demo_loss = sum(ce(demo_logits[a], labb[a]) for a in attrs)
                 if not (torch.isfinite(demo_loss) and float(demo_loss) > 0):
                     opt.zero_grad(); task_loss.backward(); opt.step(); continue
@@ -833,10 +971,15 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
     # concatenated adversary-training set (task-train tiles + pool tiles)
     X_adv = torch.cat([Xtr_task, Xtr_pool], 0)
     aidx_adv = {a: np.concatenate([aidx_tr_task[a], aidx_pool[a]]) for a in attrs}
+    y_adv = (np.concatenate([
+        np.asarray(y_task[is_train_task], dtype=np.int64),
+        np.full(len(emb_pool), -1, dtype=np.int64)])
+        if condition_on_label else None)
     adv_tiles = X_adv.shape[0]
 
     model = build_head(D, hidden, sensitive, method=method,
-                       proto_temp=proto_temp, proto_ema=proto_ema).to(device)
+                       proto_temp=proto_temp, proto_ema=proto_ema,
+                       condition_on_label=condition_on_label).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     bce = nn.BCEWithLogitsLoss()
     ce = nn.CrossEntropyLoss(ignore_index=-1)
@@ -858,6 +1001,8 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
     X_adv = X_adv.to(device)
     aidx_tr_task_t = {a: torch.tensor(aidx_tr_task[a], device=device) for a in attrs}
     aidx_adv_t = {a: torch.tensor(aidx_adv[a], device=device) for a in attrs}
+    y_adv_t = (torch.tensor(y_adv, device=device)
+               if condition_on_label else None)
 
     model.train()
     for ep in range(epochs):
@@ -866,7 +1011,10 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
         for s in range(0, n_task, batch_size):
             idx = perm[s:s + batch_size]
             lab = {a: aidx_tr_task_t[a][idx] for a in attrs}  # fino proto update
-            logit, adv_logits = model(Xtr_task[idx], lambd, labels=lab)
+            task_labels = (
+                ytr_task[idx].long() if condition_on_label else None)
+            logit, adv_logits = model(
+                Xtr_task[idx], lambd, labels=lab, task_labels=task_labels)
             loss = bce(logit, ytr_task[idx])
             for a in attrs:
                 loss = loss + ce_a(a, adv_logits[a], aidx_tr_task_t[a][idx])
@@ -877,7 +1025,10 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
             for s in range(0, adv_tiles, batch_size):
                 idx = perm2[s:s + batch_size]
                 lab = {a: aidx_adv_t[a][idx] for a in attrs}  # fino proto update
-                _, adv_logits = model(X_adv[idx], lambd, labels=lab)
+                task_labels = y_adv_t[idx] if condition_on_label else None
+                _, adv_logits = model(
+                    X_adv[idx], lambd, labels=lab,
+                    task_labels=task_labels)
                 aloss = sum(ce_a(a, adv_logits[a], aidx_adv_t[a][idx]) for a in attrs)
                 if not torch.isfinite(aloss):
                     continue
@@ -888,7 +1039,11 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
     Xev = torch.tensor(emb_task[is_eval], dtype=torch.float32).to(device)
     bc_ev = bc_task[is_eval]
     with torch.no_grad():
-        logit, adv_logits = model(Xev, lambd)
+        eval_task_labels = (
+            torch.tensor(y_task[is_eval], dtype=torch.long, device=device)
+            if condition_on_label else None)
+        logit, adv_logits = model(
+            Xev, lambd, task_labels=eval_task_labels)
         p_tile = torch.sigmoid(logit).cpu().numpy()
         adv_prob = {a: torch.softmax(adv_logits[a], -1).cpu().numpy() for a in attrs}
 
@@ -983,6 +1138,8 @@ def main():
                     help="DinoV2ViT .pt (omit/missing -> random backbone, proves plumbing)")
     ap.add_argument("--task", required=True,
                     choices=["brca_tp53", "brca", "lihc_grade", "ucec_tp53", "coad_tp53",
+                             "luad_tp53",
+                             "coad_stage",
                              "nsclc", "glioma", "cptac_nsclc", "dcis_duke",
                              "cptac_gbm"])
     ap.add_argument("--sensitive", required=True, choices=["race", "sex", "both"])
@@ -1069,10 +1226,10 @@ def main():
                     help="Number of inner CV splits when --hospital-fold is set "
                          "(default 5, stratified by task label, seed 1337).")
     ap.add_argument("--condition-on-label", action="store_true",
-                    help="When --method contrastive: AND the SupCon positive mask "
-                         "with task-label equality so positives are "
-                         "'different-demographic AND same-task-class' "
-                         "(equalized-odds-aligned). No effect for dann/fino/pcgrad.")
+                    help="Condition demographic debiasing on the task label y: "
+                         "same-y SupCon positives (contrastive), per-y adversaries "
+                         "(DANN/PCGrad), or per-y prototype banks (FINO). "
+                         "Matched-pool tiles without y remain marginal.")
     ap.add_argument("--permute-sensitive", action="store_true",
                     help="Randomly permute the sensitive-attribute values across "
                          "patients (seeded by --permute-seed) before head training. "
@@ -1083,10 +1240,6 @@ def main():
                     help="Random seed for --permute-sensitive permutation (default 1234).")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-
-    if args.condition_on_label and args.method != "contrastive":
-        ap.error(f"--condition-on-label is only supported with --method contrastive, "
-                 f"not --method {args.method}")
 
     torch = _torch()
     log = print
@@ -1130,6 +1283,7 @@ def main():
             args.task, demo, mol, args.fold_col, args.label_col, log)
         sens = sensitive_of(demo)
         _DEMO_MAP = demo
+    tile_cohort = cohort
     # Permute sensitive labels (placebo test) ----------------------------
     if args.permute_sensitive:
         permute_sensitive(sens, args.sensitive, args.permute_seed)
@@ -1153,7 +1307,10 @@ def main():
                 fold = row.get("fold", "").strip()
                 if bc and fold:
                     hf_map[bc] = fold
-        hospital_patients = {bc for bc, f in hf_map.items() if f == args.hospital_fold}
+        hospital_fold_members = {
+            bc for bc, f in hf_map.items() if f == args.hospital_fold
+        }
+        hospital_patients = set(hospital_fold_members)
         hospital_patients &= cohort  # intersect with task cohort
         if not hospital_patients:
             ap.error(f"--hospital-fold {args.hospital_fold} has zero patients "
@@ -1183,6 +1340,12 @@ def main():
             for i in va:
                 fold_of[h_bcs[i]] = k
         cohort = set(h_bcs)
+        # Stage uses the same target-cohort tiles as TP53, then the `keep`
+        # filter below restricts the cached embeddings to stage-labeled cases.
+        if args.task == "coad_stage":
+            tile_cohort = hospital_fold_members
+        else:
+            tile_cohort = cohort
         log(f"[debias] hospital fold '{args.hospital_fold}': {len(cohort)} patients, "
             f"{inner_k} inner folds (pos={n_pos}, neg={n_neg})")
 
@@ -1227,22 +1390,27 @@ def main():
         pool_tiles = []
     else:
         task_tiles, pool_tiles = collect_tiles(
-            tiles_dir, cohort, sens, args.sensitive, args.adversary_data,
+            tiles_dir, tile_cohort, sens, args.sensitive, args.adversary_data,
             args.max_task_slides, args.max_pool_slides, args.max_tiles_per_slide, log)
     if not task_tiles:
         ap.error("no task tiles collected -- check tiles-dir / cohort")
 
-    cfg_tag = (f"{args.task}-{Path(args.checkpoint).name if args.checkpoint else 'random'}"
+    cache_task = "coad_tp53" if args.task == "coad_stage" else args.task
+    cfg_tag = (f"{cache_task}-{Path(args.checkpoint).name if args.checkpoint else 'random'}"
                f"-{binfo['weights']}-mt{args.max_tiles_per_slide}")
+    checkpoint_identity = checkpoint_cache_identity(args.checkpoint)
     embed_fn = lambda tl: embed_tiles(model, mean, std, device, tl, args.embed_batch_size, log)  # noqa: E731
     log("[debias] embedding task tiles")
-    emb_task, bc_task = cached_embed(f"task-{cfg_tag}", task_tiles, embed_fn, args.cache_dir, log)
+    emb_task, bc_task = cached_embed(
+        f"task-{cfg_tag}|{checkpoint_identity}",
+        task_tiles, embed_fn, args.cache_dir, log)
     emb_pool = np.zeros((0, emb_task.shape[1]), np.float32)
     bc_pool = np.asarray([], dtype=object)
     if args.adversary_data == "matched_pool" and pool_tiles:
         log("[debias] embedding matched-pool tiles")
-        emb_pool, bc_pool = cached_embed(f"pool-{args.sensitive}-{cfg_tag}",
-                                         pool_tiles, embed_fn, args.cache_dir, log)
+        emb_pool, bc_pool = cached_embed(
+            f"pool-{args.sensitive}-{cfg_tag}|{checkpoint_identity}",
+            pool_tiles, embed_fn, args.cache_dir, log)
 
     # keep only task tiles whose patient has a fold (eval needs it) --------
     keep = np.asarray([bc in fold_of for bc in bc_task])

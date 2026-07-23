@@ -73,7 +73,8 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 DEFAULT_VARIANT = "dinov2_vits14_reg"
 IMAGE_COL_CANDIDATES = ("jpeg", "image", "image_bytes")
-RACE_MAP = {"white": "White", "black or african american": "Black", "asian": "Asian"}
+RACE_MAP = {"white": "White", "black": "Black",
+            "black or african american": "Black", "asian": "Asian"}
 SEX_MAP = {"male": "M", "female": "F"}
 WORKTREE = "/admin/home/ryan.kim/nanopath/nanopath-tests/20260710_fino-fairness"
 
@@ -529,10 +530,26 @@ def maybe_pull_hf_tiles(task, tiles_dir, hf_repo, out_path, log=print):
 def main():
     ap = argparse.ArgumentParser(description="Fairness eval harness for pathology FM checkpoints")
     ap.add_argument("--checkpoint", default=None, help="checkpoint .pt (omit / missing => random backbone)")
-    ap.add_argument("--task", required=True, choices=["nsclc", "glioma", "brca", "cptac_nsclc"])
+    ap.add_argument("--task", required=True, choices=["nsclc", "glioma", "brca", "cptac_nsclc", "dcis_duke", "cptac_gbm"])
     ap.add_argument("--tiles-dir", required=True, help="dir of tile parquet files (eval/test set)")
     ap.add_argument("--demographics-csv", required=True)
     ap.add_argument("--labels-tsv", default=None, help="CPTAC labels.tsv (cptac_nsclc)")
+    ap.add_argument("--molecular-csv", default=None,
+                    help="TCGA molecular-labels CSV (patient_barcode key). When set "
+                         "together with --label-col, the TCGA label (and fold, via "
+                         "--fold-col) are read from HERE instead of the default "
+                         "label_<task>/fold_<task> columns in --demographics-csv -- "
+                         "e.g. BRCA TP53: --label-col tp53_status --fold-col "
+                         "fold_tp53_brca. Default None = unchanged.")
+    ap.add_argument("--label-col", default=None,
+                    help="override TCGA label column, read from --molecular-csv.")
+    ap.add_argument("--fold-col", default=None,
+                    help="override TCGA fold column, read from --molecular-csv.")
+    ap.add_argument("--test-fold", type=int, default=None,
+                    help="leak-free designated TEST fold for TCGA tasks: fit the LR "
+                         "probe on ALL OTHER folds and evaluate/dump ONLY the "
+                         "patients in this fold (the encoder never saw them). "
+                         "Default None = internal out-of-fold CV (unchanged).")
     ap.add_argument("--external-test", action="store_true",
                     help="train LR on --train-tiles-dir (TCGA-NSCLC), test on --tiles-dir")
     ap.add_argument("--train-tiles-dir", default=None, help="external-test: TCGA-NSCLC tiles")
@@ -550,6 +567,12 @@ def main():
                          "for --task (see TASK_TO_COHORT) before eval")
     ap.add_argument("--hf-clean", action="store_true",
                     help="remove the HF-pulled scratch tiles after eval")
+    ap.add_argument("--dump-predictions", default=None,
+                    help="if set, write a per-patient JSONL (one line each: "
+                         "patient_id, y_true, y_score, race, sex, age) to this "
+                         "path -- the same per-patient pooled scores/labels/demo "
+                         "that feed subgroup_report. Default None leaves all "
+                         "behavior (and the --out JSON) byte-identical.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -572,6 +595,35 @@ def main():
         allowed = set(case_label)          # patients with a known label
         label_of = case_label
         fold_of_pid = None                 # internal: StratifiedKFold
+    elif args.molecular_csv and args.label_col:
+        # TCGA label/fold from an explicit molecular CSV (e.g. BRCA TP53). Mirrors
+        # post_hoc_debias.build_task_cohort: a populated --fold-col naturally
+        # restricts the cohort to the task's patients (only they carry that fold).
+        mol = load_demographics(args.molecular_csv, "patient_barcode")
+        allowed, label_of, fold_of_pid = set(), {}, {}
+        for bc, m in mol.items():
+            lv = m.get(args.label_col, "")
+            if lv in ("", None):
+                continue
+            fv = m.get(args.fold_col, "") if args.fold_col else None
+            if args.fold_col and fv in ("", None):
+                continue
+            try:
+                label_of[bc] = int(float(lv))
+            except (ValueError, TypeError):
+                continue
+            if args.fold_col:
+                try:
+                    fold_of_pid[bc] = int(float(fv))
+                except (ValueError, TypeError):
+                    label_of.pop(bc, None)
+                    continue
+            allowed.add(bc)
+        if not args.fold_col:
+            fold_of_pid = None
+        log(f"[fairness_eval] TCGA labels from {args.molecular_csv} "
+            f"label_col={args.label_col} fold_col={args.fold_col}: "
+            f"{len(allowed)} labeled patients")
     else:
         lf = tcga_labels_folds(demo, args.task)
         allowed = set(lf)
@@ -621,6 +673,25 @@ def main():
         log(f"  train: {len(tr_ids)} patients (pos={int(ytr.sum())}, neg={int((1-ytr).sum())})")
         p_hat, best_C = probe_external(Xtr, ytr, X, args.n_splits, log)
         mode = "external_test"
+    elif args.test_fold is not None:
+        if fold_of_pid is None:
+            ap.error("--test-fold requires a fold column (set --fold-col, or use a "
+                     "TCGA task that carries per-patient folds)")
+        folds = np.asarray([fold_of_pid[p] for p in patient_ids])
+        te = folds == args.test_fold
+        tr = ~te
+        if te.sum() == 0:
+            ap.error(f"--test-fold {args.test_fold}: no eval patients in that fold")
+        if len(set(y[tr])) < 2:
+            ap.error("--test-fold: the training folds are single-class")
+        log(f"[fairness_eval] leak-free test-fold={args.test_fold}: fit probe on "
+            f"train={int(tr.sum())} patients (folds!={args.test_fold}), evaluate "
+            f"test={int(te.sum())} held-out patients")
+        p_te, best_C = probe_external(X[tr], y[tr], X[te], args.n_splits, log)
+        # collapse the cohort to the held-out test fold; only it is scored/dumped
+        patient_ids = [p for p, t in zip(patient_ids, te) if t]
+        X, y, p_hat = X[te], y[te], p_te
+        mode = f"test_fold_{args.test_fold}"
     else:
         folds = (np.asarray([fold_of_pid[p] for p in patient_ids])
                  if fold_of_pid is not None else None)
@@ -643,6 +714,32 @@ def main():
 
     attributes = {attr: subgroup_report(y, p_hat, groups[attr], args.min_n)
                   for attr in ("race", "sex", "age")}
+
+    # optional per-patient prediction dump (raw material for bootstrap CIs /
+    # paired p-values). Uses the SAME arrays that feed subgroup_report:
+    # y (labels), p_hat (pooled scores), and the joined race/sex subgroup labels;
+    # age is the raw age_years from the joined demographics row.
+    if args.dump_predictions:
+        dpath = Path(args.dump_predictions)
+        dpath.parent.mkdir(parents=True, exist_ok=True)
+        with open(dpath, "w") as fh:
+            for i, pid in enumerate(patient_ids):
+                row = demo.get(pid) or {}
+                try:
+                    age_val = float(row.get("age_years", ""))
+                except (ValueError, TypeError):
+                    age_val = None
+                fh.write(json.dumps({
+                    "patient_id": pid,
+                    "y_true": int(y[i]),
+                    "y_score": float(p_hat[i]),
+                    "race": groups["race"][i],
+                    "sex": groups["sex"][i],
+                    "age": age_val,
+                }) + "\n")
+        log(f"[fairness_eval] dumped {len(patient_ids)} per-patient predictions "
+            f"-> {dpath}")
+
     low_power_flags = [f"{attr}:{g}" for attr in attributes
                        for g, s in attributes[attr]["subgroups"].items() if s["low_power"]]
 
