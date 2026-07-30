@@ -1,0 +1,38 @@
+{
+  "schema": "matched-cancer-fixed48-full-cardinality-preflight-record/v1",
+  "status": "pass",
+  "synthetic_only": true,
+  "real_outcomes_opened": false,
+  "row_count": 1753920,
+  "combination_count": 1152,
+  "nested_audit_count": 21600,
+  "expected_decision": "equivalent",
+  "analyzer_verifier_semantic_match": true,
+  "input_sha256": "f76dc1395664ff1779d964c6801868f2864c44e3bd149d507210098e00a2a190",
+  "identities": {
+    "generator": {
+      "canonical_path": "/admin/home/ryan.kim/nt/tools/matched_cancer_fixed48_20260730/full_cardinality_preflight.py",
+      "sha256": "bacf6ef993b8b0e8f1b09a9f8c8bde951cb1e7cbfbb90fd92a151e1a8d4ca8d5"
+    },
+    "analyzer": {
+      "canonical_path": "/admin/home/ryan.kim/nt/tools/matched_cancer_diagnostic_20260730/analyzer.py",
+      "sha256": "86e3483f946c769cce5477fc50a3aac228b25848748d66c23f267dc20d63075f"
+    },
+    "verifier": {
+      "canonical_path": "/admin/home/ryan.kim/nt/tools/matched_cancer_diagnostic_20260730/verifier.py",
+      "sha256": "d8821d585a64aae2eba278c736aa3990e8eb81252f94e91963abf7c40b7620c8"
+    },
+    "synthetic_predictions": {
+      "bytes": 462458664,
+      "sha256": "f76dc1395664ff1779d964c6801868f2864c44e3bd149d507210098e00a2a190"
+    },
+    "analysis_report": {
+      "bytes": 7119509,
+      "sha256": "e8a6f3821897f2b8b36d78af7e3d55fc02bd5e43f7f47f73cc8d4804187d5e87"
+    },
+    "verification_report": {
+      "bytes": 7119586,
+      "sha256": "d74cc6f87f49d48c3316ce347b309a447f7b711ed40d4573004c045f4d03b7cd"
+    }
+  }
+}
