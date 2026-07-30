@@ -169,12 +169,12 @@ def verify_tile_view_receipt(
             if (
                 view_stat.st_size != view_identity["bytes"]
                 or source_stat.st_size != source_identity["bytes"]
-                or view_stat.st_dev != row.get("view_device")
                 or view_stat.st_ino != row.get("view_inode")
-                or source_stat.st_dev != row.get("source_device")
                 or source_stat.st_ino != row.get("source_inode")
                 or view_stat.st_dev != source_stat.st_dev
                 or view_stat.st_ino != source_stat.st_ino
+                or view_stat.st_nlink < 2
+                or source_stat.st_nlink < 2
             ):
                 raise ValueError(f"tile-view record {key} hardlink differs")
         if receipt.get("slide_counts", {}).get(cancer) != len(keys):

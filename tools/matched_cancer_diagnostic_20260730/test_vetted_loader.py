@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -336,6 +338,122 @@ class VettedLoaderTests(unittest.TestCase):
                     sensitive_of_fn=post_hoc_debias.sensitive_of,
                     collect_tiles_fn=collect,
                 )
+
+    def test_recorded_device_is_not_treated_as_cross_host_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            for row in receipt["inventory"].values():
+                row["source_device"] += 10_000
+                row["view_device"] += 10_000
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+
+            verified = vetted_loader.verify_tile_view_receipt(
+                receipt_path, directories
+            )
+
+            self.assertEqual(verified["file_count"], 2)
+
+    def test_single_link_topology_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            first_key = sorted(receipt["inventory"])[0]
+            source = Path(
+                receipt["identities"]["source_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            view = Path(
+                receipt["identities"]["view_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            original_stat = Path.stat
+
+            def one_link_stat(path: Path, *args, **kwargs):
+                stat_result = original_stat(path, *args, **kwargs)
+                if path in {source, view}:
+                    fields = list(stat_result)
+                    fields[3] = 1
+                    return os.stat_result(fields)
+                return stat_result
+
+            with mock.patch.object(Path, "stat", autospec=True) as patched:
+                patched.side_effect = one_link_stat
+                with self.assertRaisesRegex(ValueError, "hardlink differs"):
+                    vetted_loader.verify_tile_view_receipt(
+                        receipt_path, directories
+                    )
+
+    def test_current_source_view_device_mismatch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            first_key = sorted(receipt["inventory"])[0]
+            view = Path(
+                receipt["identities"]["view_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            original_stat = Path.stat
+
+            def different_device_stat(path: Path, *args, **kwargs):
+                stat_result = original_stat(path, *args, **kwargs)
+                if path == view:
+                    fields = list(stat_result)
+                    fields[2] += 1
+                    return os.stat_result(fields)
+                return stat_result
+
+            with mock.patch.object(Path, "stat", autospec=True) as patched:
+                patched.side_effect = different_device_stat
+                with self.assertRaisesRegex(ValueError, "hardlink differs"):
+                    vetted_loader.verify_tile_view_receipt(
+                        receipt_path, directories
+                    )
 
     def test_full_load_runs_both_cancers_and_exact_bph_topology(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
