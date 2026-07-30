@@ -1,0 +1,38 @@
+{
+  "schema": "matched-cancer-diagnostic-deployment/v1",
+  "study_id": "matched_cancer_stage_20260730",
+  "calibration_scenario": "brca_luad_black_white_calibration_seed32001",
+  "representation_seed": 32001,
+  "arms": ["B", "P", "H"],
+  "head_seeds": [42001, 42002, 42003, 42004],
+  "folds": [0, 1, 2, 3, 4],
+  "cohorts": {
+    "BRCA": {
+      "logical_name": "brca_racepanel",
+      "expected_target_rows": 334,
+      "expected_eligible_patients": 328,
+      "expected_exclusions_by_race": {
+        "Asian": 5,
+        "American Indian or Alaska Native": 1
+      },
+      "expected_race_counts": {
+        "Black": 118,
+        "White": 210
+      },
+      "task": "brca_tp53"
+    },
+    "LUAD": {
+      "logical_name": "luad_target_hospitals",
+      "expected_target_rows": 281,
+      "expected_eligible_patients": 281,
+      "expected_exclusions_by_race": {},
+      "expected_race_counts": {
+        "Black": 40,
+        "White": 241
+      },
+      "task": "luad_tp53"
+    }
+  },
+  "loader_protocol": "load(contract=..., cancers=..., authorized_paths=..., output_root=..., gate_receipt=...) -> non-None",
+  "prediction_schema": "matched-cancer-diagnostic-prediction/v1"
+}
