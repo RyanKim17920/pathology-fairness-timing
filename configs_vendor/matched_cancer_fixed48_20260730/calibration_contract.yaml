@@ -1,0 +1,22 @@
+schema: matched-cancer-fixed48-calibration-plan/v1
+study_id: matched_cancer_fixed48_20260730
+scenario_prefix: brca_luad_black_white_calibration_seed
+seed_plan: configs_vendor/matched_cancer_fixed48_20260730/calibration_seed_plan.yaml
+base_template: configs_vendor/matched_cancer_fixed48_20260730/calibration_base_template.yaml
+exclude_barcodes_file: configs_vendor/matched_stage_union_20260730/exclude_union_target_hospitals.txt
+population_file: configs_vendor/matched_cancer_stage_20260730/population_cancer_race.csv
+output_namespace: /data/ryan.kim/nanopath/reruns/matched_cancer_fixed48_20260730/calibration
+population:
+  cancer_ids: [2, 15]
+  race_ids: [2, 4]
+replay:
+  steps: 781
+  batch_size: 128
+adapter:
+  lr: 0.001
+  weight_decay: 0.0001
+fair_weight: 0.1
+arms:
+  B: {slot1_fair_weight: 0.0, slot2_fair_weight: 0.0}
+  P: {slot1_fair_weight: 0.1, slot2_fair_weight: 0.0}
+  H: {slot1_fair_weight: 0.0, slot2_fair_weight: 0.1}

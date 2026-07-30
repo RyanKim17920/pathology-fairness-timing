@@ -1,0 +1,55 @@
+schema: matched-cancer-fixed48-seed-plan/v1
+study_id: matched_cancer_fixed48_20260730
+legacy_seed32001:
+  disposition: systems_only_excluded_from_inference
+  reusable: false
+  rerun_in_fixed48_namespace: true
+seeds:
+  - {representation_seed: 32001, replay_seed: 52001, data_order_seed: 62001, adapter_init_seed: 72001}
+  - {representation_seed: 32002, replay_seed: 52002, data_order_seed: 62002, adapter_init_seed: 72002}
+  - {representation_seed: 32003, replay_seed: 52003, data_order_seed: 62003, adapter_init_seed: 72003}
+  - {representation_seed: 32004, replay_seed: 52004, data_order_seed: 62004, adapter_init_seed: 72004}
+  - {representation_seed: 32005, replay_seed: 52005, data_order_seed: 62005, adapter_init_seed: 72005}
+  - {representation_seed: 32006, replay_seed: 52006, data_order_seed: 62006, adapter_init_seed: 72006}
+  - {representation_seed: 32007, replay_seed: 52007, data_order_seed: 62007, adapter_init_seed: 72007}
+  - {representation_seed: 32008, replay_seed: 52008, data_order_seed: 62008, adapter_init_seed: 72008}
+  - {representation_seed: 32009, replay_seed: 52009, data_order_seed: 62009, adapter_init_seed: 72009}
+  - {representation_seed: 32010, replay_seed: 52010, data_order_seed: 62010, adapter_init_seed: 72010}
+  - {representation_seed: 32011, replay_seed: 52011, data_order_seed: 62011, adapter_init_seed: 72011}
+  - {representation_seed: 32012, replay_seed: 52012, data_order_seed: 62012, adapter_init_seed: 72012}
+  - {representation_seed: 32013, replay_seed: 52013, data_order_seed: 62013, adapter_init_seed: 72013}
+  - {representation_seed: 32014, replay_seed: 52014, data_order_seed: 62014, adapter_init_seed: 72014}
+  - {representation_seed: 32015, replay_seed: 52015, data_order_seed: 62015, adapter_init_seed: 72015}
+  - {representation_seed: 32016, replay_seed: 52016, data_order_seed: 62016, adapter_init_seed: 72016}
+  - {representation_seed: 32017, replay_seed: 52017, data_order_seed: 62017, adapter_init_seed: 72017}
+  - {representation_seed: 32018, replay_seed: 52018, data_order_seed: 62018, adapter_init_seed: 72018}
+  - {representation_seed: 32019, replay_seed: 52019, data_order_seed: 62019, adapter_init_seed: 72019}
+  - {representation_seed: 32020, replay_seed: 52020, data_order_seed: 62020, adapter_init_seed: 72020}
+  - {representation_seed: 32021, replay_seed: 52021, data_order_seed: 62021, adapter_init_seed: 72021}
+  - {representation_seed: 32022, replay_seed: 52022, data_order_seed: 62022, adapter_init_seed: 72022}
+  - {representation_seed: 32023, replay_seed: 52023, data_order_seed: 62023, adapter_init_seed: 72023}
+  - {representation_seed: 32024, replay_seed: 52024, data_order_seed: 62024, adapter_init_seed: 72024}
+  - {representation_seed: 32025, replay_seed: 52025, data_order_seed: 62025, adapter_init_seed: 72025}
+  - {representation_seed: 32026, replay_seed: 52026, data_order_seed: 62026, adapter_init_seed: 72026}
+  - {representation_seed: 32027, replay_seed: 52027, data_order_seed: 62027, adapter_init_seed: 72027}
+  - {representation_seed: 32028, replay_seed: 52028, data_order_seed: 62028, adapter_init_seed: 72028}
+  - {representation_seed: 32029, replay_seed: 52029, data_order_seed: 62029, adapter_init_seed: 72029}
+  - {representation_seed: 32030, replay_seed: 52030, data_order_seed: 62030, adapter_init_seed: 72030}
+  - {representation_seed: 32031, replay_seed: 52031, data_order_seed: 62031, adapter_init_seed: 72031}
+  - {representation_seed: 32032, replay_seed: 52032, data_order_seed: 62032, adapter_init_seed: 72032}
+  - {representation_seed: 32033, replay_seed: 52033, data_order_seed: 62033, adapter_init_seed: 72033}
+  - {representation_seed: 32034, replay_seed: 52034, data_order_seed: 62034, adapter_init_seed: 72034}
+  - {representation_seed: 32035, replay_seed: 52035, data_order_seed: 62035, adapter_init_seed: 72035}
+  - {representation_seed: 32036, replay_seed: 52036, data_order_seed: 62036, adapter_init_seed: 72036}
+  - {representation_seed: 32037, replay_seed: 52037, data_order_seed: 62037, adapter_init_seed: 72037}
+  - {representation_seed: 32038, replay_seed: 52038, data_order_seed: 62038, adapter_init_seed: 72038}
+  - {representation_seed: 32039, replay_seed: 52039, data_order_seed: 62039, adapter_init_seed: 72039}
+  - {representation_seed: 32040, replay_seed: 52040, data_order_seed: 62040, adapter_init_seed: 72040}
+  - {representation_seed: 32041, replay_seed: 52041, data_order_seed: 62041, adapter_init_seed: 72041}
+  - {representation_seed: 32042, replay_seed: 52042, data_order_seed: 62042, adapter_init_seed: 72042}
+  - {representation_seed: 32043, replay_seed: 52043, data_order_seed: 62043, adapter_init_seed: 72043}
+  - {representation_seed: 32044, replay_seed: 52044, data_order_seed: 62044, adapter_init_seed: 72044}
+  - {representation_seed: 32045, replay_seed: 52045, data_order_seed: 62045, adapter_init_seed: 72045}
+  - {representation_seed: 32046, replay_seed: 52046, data_order_seed: 62046, adapter_init_seed: 72046}
+  - {representation_seed: 32047, replay_seed: 52047, data_order_seed: 62047, adapter_init_seed: 72047}
+  - {representation_seed: 32048, replay_seed: 52048, data_order_seed: 62048, adapter_init_seed: 72048}
