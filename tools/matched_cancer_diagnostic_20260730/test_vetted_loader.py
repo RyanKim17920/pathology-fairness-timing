@@ -455,6 +455,117 @@ class VettedLoaderTests(unittest.TestCase):
                         receipt_path, directories
                     )
 
+    def test_recorded_inode_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            first_key = sorted(receipt["inventory"])[0]
+            receipt["inventory"][first_key]["source_inode"] += 1
+            receipt["inventory"][first_key]["view_inode"] += 1
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+
+            with self.assertRaisesRegex(ValueError, "hardlink differs"):
+                vetted_loader.verify_tile_view_receipt(
+                    receipt_path, directories
+                )
+
+    def test_current_size_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            first_key = sorted(receipt["inventory"])[0]
+            source = Path(
+                receipt["identities"]["source_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            view = Path(
+                receipt["identities"]["view_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            original_stat = Path.stat
+
+            def larger_file_stat(path: Path, *args, **kwargs):
+                stat_result = original_stat(path, *args, **kwargs)
+                if path in {source, view}:
+                    fields = list(stat_result)
+                    fields[6] += 1
+                    return os.stat_result(fields)
+                return stat_result
+
+            with mock.patch.object(Path, "stat", autospec=True) as patched:
+                patched.side_effect = larger_file_stat
+                with self.assertRaisesRegex(ValueError, "hardlink differs"):
+                    vetted_loader.verify_tile_view_receipt(
+                        receipt_path, directories
+                    )
+
+    def test_postseal_view_symlink_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folds = root / "brca_folds.csv"
+            luad_folds = root / "luad_folds.csv"
+            folds.write_text(
+                "patient_barcode,fold,race\nBRCA-P1,target,white\n"
+            )
+            luad_folds.write_text(
+                "patient_barcode,fold,race\nLUAD-P1,target,white\n"
+            )
+            receipt_path, directories = make_synthetic_tile_view(
+                root, {"BRCA": folds, "LUAD": luad_folds}
+            )
+            receipt = json.loads(receipt_path.read_text())
+            first_key = sorted(receipt["inventory"])[0]
+            source = Path(
+                receipt["identities"]["source_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            view = Path(
+                receipt["identities"]["view_parquets"][first_key][
+                    "canonical_path"
+                ]
+            )
+            view.unlink()
+            view.symlink_to(source)
+
+            with self.assertRaises(ValueError):
+                vetted_loader.verify_tile_view_receipt(
+                    receipt_path, directories
+                )
+
     def test_full_load_runs_both_cancers_and_exact_bph_topology(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
