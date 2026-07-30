@@ -100,6 +100,9 @@ SOURCE_SPEC: dict[str, Path] = {
     "protocol.prelaunch_incident_record": REPO
     / "results/matched_cancer_stage_20260730/fixed48_execution/"
     "PRELAUNCH_INCIDENT_RECORD.md",
+    "protocol.canary_failure_amendment_01": REPO
+    / "results/matched_cancer_stage_20260730/fixed48_execution/"
+    "CANARY_FAILURE_AMENDMENT_01.md",
     "legacy.stage_config_builder": REPO
     / "tools/matched_cancer_stage_20260730/config_builder.py",
     "legacy.stage_package_init": REPO
