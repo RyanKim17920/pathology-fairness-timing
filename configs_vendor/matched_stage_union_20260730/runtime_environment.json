@@ -1,0 +1,12 @@
+{
+  "Pillow": "12.2.0",
+  "numpy": "2.4.4",
+  "python_executable": "/admin/home/ryan.kim/nanopath/nanopath-tests/20260710_fino-fairness/.venv/bin/python",
+  "python_version": "3.12.11",
+  "schema": 1,
+  "sklearn": "1.8.0",
+  "torch": "2.8.0+cu129",
+  "torch_cuda": "12.9",
+  "torch_cudnn": 91002,
+  "torchvision": "0.23.0+cu129"
+}

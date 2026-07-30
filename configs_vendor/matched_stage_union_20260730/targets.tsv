@@ -1,0 +1,5 @@
+target	task	hospital_fold	folds_csv	expected_patients
+brca	brca_tp53	target	data/metadata/brca_racepanel_folds.csv	334
+luad	luad_tp53	target	data/metadata/luad_hospital_folds.csv	281
+ucec	ucec_tp53	target	data/metadata/ucec_hospital_folds.csv	181
+coad	coad_tp53	target	data/metadata/coad_hospital_folds.csv	176
