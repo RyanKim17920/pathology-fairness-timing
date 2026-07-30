@@ -1,0 +1,29 @@
+schema: matched-cancer-stage-calibration/v1
+study_id: matched_cancer_stage_20260730
+scenario: brca_luad_black_white_calibration_seed32001
+representation_seed: 32001
+base_config: configs_vendor/matched_cancer_stage_20260730/calibration_seed32001_base.yaml
+exclude_barcodes_file: configs_vendor/matched_stage_union_20260730/exclude_union_target_hospitals.txt
+population:
+  cancer_ids: [2, 15]
+  race_ids: [2, 4]
+replay:
+  steps: 781
+  batch_size: 128
+  seed: 52001
+data_order_seed: 62001
+adapter:
+  init_seed: 72001
+  lr: 0.001
+  weight_decay: 0.0001
+fair_weight: 0.1
+arms:
+  B:
+    slot1_fair_weight: 0.0
+    slot2_fair_weight: 0.0
+  P:
+    slot1_fair_weight: 0.1
+    slot2_fair_weight: 0.0
+  H:
+    slot1_fair_weight: 0.0
+    slot2_fair_weight: 0.1

@@ -1,0 +1,28 @@
+schema: matched-cancer-stage-smoke/v1
+study_id: matched_cancer_stage_20260730
+scenario: brca_luad_black_white
+base_config: configs_vendor/matched_stage_union_20260730/smoke_faircon.yaml
+exclude_barcodes_file: configs_vendor/matched_stage_union_20260730/exclude_union_target_hospitals.txt
+population:
+  cancer_ids: [2, 15]
+  race_ids: [2, 4]
+replay:
+  steps: 4
+  batch_size: 8
+  seed: 50730
+data_order_seed: 60730
+adapter:
+  init_seed: 70730
+  lr: 0.001
+  weight_decay: 0.0001
+fair_weight: 0.1
+arms:
+  B:
+    slot1_fair_weight: 0.0
+    slot2_fair_weight: 0.0
+  P:
+    slot1_fair_weight: 0.1
+    slot2_fair_weight: 0.0
+  H:
+    slot1_fair_weight: 0.0
+    slot2_fair_weight: 0.1
