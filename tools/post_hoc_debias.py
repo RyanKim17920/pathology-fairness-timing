@@ -588,7 +588,20 @@ def cached_embed(tag, tiles, embed_fn, cache_dir, log=print):
     emb, ok = embed_fn(tiles)
     emb, barcodes = emb[ok], barcodes[ok]
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    np.savez(path, emb=emb, barcodes=barcodes)
+    # Publish cache entries atomically so a concurrent reader never observes a
+    # partially written zip archive.
+    import tempfile
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                dir=cache_dir, prefix=".emb_tmp_", suffix=".npz",
+                delete=False) as tmp:
+            tmp_path = tmp.name
+        np.savez(tmp_path, emb=emb, barcodes=barcodes)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
     log(f"  [cache write] {path}  ({emb.shape[0]} tiles)")
     return emb, barcodes
 
@@ -667,14 +680,11 @@ def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None,
         rows = valid & (pos_cnt > 0)
         if int(rows.sum()) == 0:
             continue
-        if task_labels is not None:
-            # The diagonal of logp is -inf; mask before reduction so a false
-            # positive does not create NaN via 0 * -inf in the conditioned path.
-            mean_logp_pos = (
-                logp.masked_fill(~pos, 0.0).sum(1)[rows]
-                / pos_cnt[rows].clamp(min=1))
-        else:
-            mean_logp_pos = (logp * pos).sum(1)[rows] / pos_cnt[rows].clamp(min=1)
+        # The diagonal of logp is -inf. Mask before reduction for every path:
+        # multiplying a false Boolean mask by -inf produces NaN (0 * -inf).
+        mean_logp_pos = (
+            logp.masked_fill(~pos, 0.0).sum(1)[rows]
+            / pos_cnt[rows].clamp(min=1))
         per_anchor = -mean_logp_pos
         if weights is not None:
             wrow = weights[a][lab[rows]]               # inv-freq weight per anchor
