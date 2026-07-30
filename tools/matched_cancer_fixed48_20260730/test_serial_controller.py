@@ -45,7 +45,7 @@ class SerialControllerTests(unittest.TestCase):
         self.manifest.write_text("{}\n")
         self.authorization.write_text("{}\n")
         self.feasibility = (
-            self.root / "control/FEASIBILITY_GATE_RECEIPT.json"
+            self.root / "control/FEASIBILITY_GATE_RECEIPT_V2.json"
         )
         self.feasibility.parent.mkdir(parents=True)
         self.feasibility.write_text("{}\n")
@@ -347,6 +347,20 @@ class SubmissionScriptTests(unittest.TestCase):
         self.assertNotIn("--array", submit)
         self.assertNotIn("--dependency", submit)
         self.assertNotIn("afterok", submit)
+        self.assertEqual(driver.count("#SBATCH --job-name=main_1gpu"), 1)
+        self.assertEqual(
+            driver.count(
+                "#SBATCH --comment=matched_cancer_fixed48_20260730"
+            ),
+            1,
+        )
+        self.assertIn("STUDY_COMMENT=matched_cancer_fixed48_20260730", submit)
+        self.assertIn("-o '%i|%k'", submit)
+        self.assertNotIn('-n "$JOB_NAME"', submit)
+        for source in (driver, submit):
+            self.assertIn("FIXED48_SOURCE_MANIFEST_V2.json", source)
+            self.assertIn("AUTHORIZATION_MANIFEST_V3.json", source)
+            self.assertIn("FEASIBILITY_GATE_RECEIPT_V2.json", source)
 
 
 if __name__ == "__main__":

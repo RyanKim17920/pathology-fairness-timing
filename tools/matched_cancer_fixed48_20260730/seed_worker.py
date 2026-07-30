@@ -232,7 +232,7 @@ def run(
     feasibility_path = Path(feasibility_gate).resolve(strict=True)
     if feasibility_path != (
         production_root.resolve()
-        / "control/FEASIBILITY_GATE_RECEIPT.json"
+        / "control/FEASIBILITY_GATE_RECEIPT_V2.json"
     ):
         raise ValueError("feasibility gate path differs from production contract")
     manifest_identity = file_identity(manifest_path)

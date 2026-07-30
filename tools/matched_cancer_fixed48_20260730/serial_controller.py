@@ -185,7 +185,7 @@ def verify_seed_success(
         raise ValueError("seed-success source manifest differs")
     expected_feasibility = (
         Path(production_root).resolve()
-        / "control/FEASIBILITY_GATE_RECEIPT.json"
+        / "control/FEASIBILITY_GATE_RECEIPT_V2.json"
     )
     if identities["feasibility_gate"] != file_identity(expected_feasibility):
         raise ValueError("seed-success feasibility gate differs")
@@ -350,7 +350,7 @@ def run_controller(
     if feasibility.is_symlink() or not feasibility.is_file():
         raise ValueError("feasibility gate must be a non-symlink file")
     feasibility = feasibility.resolve(strict=True)
-    expected_feasibility = root / "control/FEASIBILITY_GATE_RECEIPT.json"
+    expected_feasibility = root / "control/FEASIBILITY_GATE_RECEIPT_V2.json"
     if feasibility != expected_feasibility:
         raise ValueError("feasibility gate path differs from production contract")
     verify_feasibility(

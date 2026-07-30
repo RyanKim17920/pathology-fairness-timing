@@ -17,11 +17,12 @@ PYVENV_CONFIG=/admin/home/ryan.kim/nanopath/.venv/pyvenv.cfg
 SBATCH=/opt/slurm/bin/sbatch
 SQUEUE=/opt/slurm/bin/squeue
 SLURM_USER=ryan.kim
-JOB_NAME=mcs_fixed48
+JOB_NAME=main_1gpu
+STUDY_COMMENT=matched_cancer_fixed48_20260730
 ROOT=/data/ryan.kim/nanopath/reruns/matched_cancer_fixed48_20260730
-MANIFEST="$ROOT/control/FIXED48_SOURCE_MANIFEST.json"
-AUTHORIZATION="$ROOT/authorization/AUTHORIZATION_MANIFEST_V2.json"
-FEASIBILITY="$ROOT/control/FEASIBILITY_GATE_RECEIPT.json"
+MANIFEST="$ROOT/control/FIXED48_SOURCE_MANIFEST_V2.json"
+AUTHORIZATION="$ROOT/authorization/AUTHORIZATION_MANIFEST_V3.json"
+FEASIBILITY="$ROOT/control/FEASIBILITY_GATE_RECEIPT_V2.json"
 DRIVER="$REPO/tools/matched_cancer_fixed48_20260730/serial_fixed48.sbatch"
 CONTROL="$REPO/results/matched_cancer_stage_20260730/fixed48_execution/submission"
 LOCK="$CONTROL/safe_submit.lock"
@@ -57,8 +58,11 @@ if grep -Eiq '^[[:space:]]*#SBATCH[[:space:]]+--(array|dependency)(=|[[:space:]]
   exit 2
 fi
 
-mapfile -t STUDY_JOBS < <(
-  "$SQUEUE" -h -u "$SLURM_USER" -n "$JOB_NAME" -t PENDING,RUNNING -o '%i'
+STUDY_JOBS=()
+while IFS='|' read -r job_id comment; do
+  [[ "$comment" == "$STUDY_COMMENT" ]] && STUDY_JOBS+=("$job_id")
+done < <(
+  "$SQUEUE" -h -u "$SLURM_USER" -t PENDING,RUNNING -o '%i|%k'
 )
 if ((${#STUDY_JOBS[@]} > 1)); then
   echo "invariant failure: multiple queued/running fixed-48 jobs" >&2

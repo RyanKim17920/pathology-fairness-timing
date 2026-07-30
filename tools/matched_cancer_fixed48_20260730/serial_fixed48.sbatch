@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One allocation, one visible GPU, strictly serial fixed-48 execution.
 
-#SBATCH --job-name=mcs_fixed48
+#SBATCH --job-name=main_1gpu
+#SBATCH --comment=matched_cancer_fixed48_20260730
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
@@ -20,9 +21,9 @@ PY=/admin/home/ryan.kim/nanopath/.venv/bin/python
 PY_TARGET=/admin/home/ryan.kim/.local/share/uv/python/cpython-3.12.11-linux-x86_64-gnu/bin/python3.12
 PYVENV_CONFIG=/admin/home/ryan.kim/nanopath/.venv/pyvenv.cfg
 ROOT=/data/ryan.kim/nanopath/reruns/matched_cancer_fixed48_20260730
-MANIFEST="$ROOT/control/FIXED48_SOURCE_MANIFEST.json"
-AUTHORIZATION="$ROOT/authorization/AUTHORIZATION_MANIFEST_V2.json"
-FEASIBILITY="$ROOT/control/FEASIBILITY_GATE_RECEIPT.json"
+MANIFEST="$ROOT/control/FIXED48_SOURCE_MANIFEST_V2.json"
+AUTHORIZATION="$ROOT/authorization/AUTHORIZATION_MANIFEST_V3.json"
+FEASIBILITY="$ROOT/control/FEASIBILITY_GATE_RECEIPT_V2.json"
 SEED_WORKER="$REPO/tools/matched_cancer_fixed48_20260730/seed_worker.py"
 
 : "${FIXED48_RUN_MODE:?FIXED48_RUN_MODE must be canary or remainder}"
