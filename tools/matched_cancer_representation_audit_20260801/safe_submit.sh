@@ -77,11 +77,10 @@ LAUNCH_NONCE=$("$PY" -c 'import secrets; print(secrets.token_hex(16))')
   echo "nonce generator returned an invalid value" >&2
   exit 5
 }
-PRELAUNCH="$CONTROL/PRELAUNCH_${LAUNCH_NONCE}.json"
+PRELAUNCH="$OUTPUT_ROOT/PREFLIGHT_RECEIPT.json"
 cd "$REPO"
 "$PY" -m tools.matched_cancer_representation_audit_20260801.pipeline preflight \
   --output-root "$OUTPUT_ROOT" \
-  --receipt "$PRELAUNCH" \
   --launch-nonce "$LAUNCH_NONCE"
 
 # This is intentionally the sole allocation submission in this script.

@@ -39,6 +39,11 @@ PIPELINE="$REPO/tools/matched_cancer_representation_audit_20260801/pipeline.py"
   echo "launch nonce must contain exactly 128 bits" >&2
   exit 2
 }
+[[ "$REP_AUDIT_PREFLIGHT_RECEIPT" == \
+  "$REP_AUDIT_OUTPUT_ROOT/PREFLIGHT_RECEIPT.json" ]] || {
+  echo "preflight receipt path differs from the frozen attempt root" >&2
+  exit 2
+}
 [[ -z "${SLURM_ARRAY_JOB_ID:-}" && -z "${SLURM_ARRAY_TASK_ID:-}" ]] || {
   echo "job arrays are prohibited" >&2
   exit 2
@@ -73,5 +78,4 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 cd "$REPO"
 "$PY" -m tools.matched_cancer_representation_audit_20260801.pipeline run \
-  --output-root "$REP_AUDIT_OUTPUT_ROOT" \
-  --preflight-receipt "$REP_AUDIT_PREFLIGHT_RECEIPT"
+  --output-root "$REP_AUDIT_OUTPUT_ROOT"
