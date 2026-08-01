@@ -422,6 +422,60 @@ def read_compact_cache(path: str | os.PathLike[str]) -> tuple[dict[str, Any], np
     return metadata, embeddings, rows
 
 
+def validate_compact_topology(
+    metadata: Mapping[str, Any],
+    embeddings: np.ndarray,
+    rows: Sequence[Mapping[str, Any]],
+    population: Sequence[Mapping[str, str]],
+) -> None:
+    """Require one complete, aligned 32-tile view package per patient."""
+    contract.validate_metadata_records(population)
+    seed = metadata.get("seed")
+    layer = metadata.get("layer")
+    if seed not in contract.FM_SEEDS or layer not in contract.LAYER_DIMENSIONS:
+        raise ExtractionError("compact cache seed/layer metadata drift")
+    if metadata.get("study_id") != contract.STUDY_ID:
+        raise ExtractionError("compact cache study identity drift")
+    contract.validate_representation_normalization(layer, metadata.get("normalization"))
+    expected_count = len(population) * contract.TILES_PER_PATIENT
+    if metadata.get("row_count") != expected_count or len(rows) != expected_count:
+        raise ExtractionError("compact cache row cardinality drift")
+    if np.asarray(embeddings).shape != (
+        expected_count,
+        contract.LAYER_DIMENSIONS[layer],
+    ):
+        raise ExtractionError("compact cache production embedding shape drift")
+    population_map = {row["patient_id"]: dict(row) for row in population}
+    if len(population_map) != len(population):
+        raise ExtractionError("compact population patient identities are not unique")
+    expected_order: list[tuple[str, str, int]] = []
+    for population_row in population:
+        for view in contract.TILE_VIEWS:
+            for view_rank in range(contract.TILES_PER_VIEW):
+                expected_order.append((population_row["patient_id"], view, view_rank))
+    observed_order = [
+        (str(row["patient_id"]), str(row["view"]), int(row["view_rank"]))
+        for row in rows
+    ]
+    if observed_order != expected_order:
+        raise ExtractionError("compact cache patient/view/rank order drift")
+    identities: set[tuple[str, int, int, str]] = set()
+    for row in rows:
+        patient = str(row["patient_id"])
+        frozen = population_map.get(patient)
+        if frozen is None or any(str(row[field]) != frozen[field] for field in contract.METADATA_ALLOWLIST):
+            raise ExtractionError("compact row differs from frozen patient metadata")
+        identity = (
+            patient,
+            int(row["occurrence_index"]),
+            int(row["global_index"]),
+            str(row["payload_sha256"]),
+        )
+        if identity in identities:
+            raise ExtractionError("compact cache repeats a selected tile identity")
+        identities.add(identity)
+
+
 def embed_encoder_and_adapter(
     representation: Any,
     tiles: Sequence[tuple[str, bytes | bytearray | memoryview]],

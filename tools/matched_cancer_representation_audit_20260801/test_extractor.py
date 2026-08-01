@@ -155,6 +155,34 @@ class CompactCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(extractor.ExtractionError, "digest mismatch"):
                 extractor.read_compact_cache(path)
 
+    def test_production_topology_requires_both_exact_views_in_frozen_order(self) -> None:
+        population = (
+            {"patient_id": "P1", "cancer": "BRCA", "race": "Black", "tss": "A2"},
+        )
+        rows = tuple(
+            {
+                **population[0],
+                "view": view,
+                "view_rank": rank,
+                "occurrence_index": offset,
+                "global_index": offset,
+                "payload_sha256": hashlib.sha256(f"x-{offset}".encode()).hexdigest(),
+            }
+            for view, start in (("A", 0), ("B", 16))
+            for rank, offset in enumerate(range(start, start + 16))
+        )
+        embeddings = _normalized(32, 128)
+        metadata = {
+            "study_id": contract.STUDY_ID,
+            "seed": 32001,
+            "layer": "B",
+            "normalization": "per_tile_l2",
+            "row_count": 32,
+        }
+        extractor.validate_compact_topology(metadata, embeddings, rows, population)
+        with self.assertRaisesRegex(extractor.ExtractionError, "order drift"):
+            extractor.validate_compact_topology(metadata, embeddings, tuple(reversed(rows)), population)
+
 
 class TileBundleTests(unittest.TestCase):
     def test_receipt_bound_bundle_round_trip_and_tamper(self) -> None:
