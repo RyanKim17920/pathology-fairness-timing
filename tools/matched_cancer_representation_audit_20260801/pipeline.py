@@ -176,12 +176,19 @@ def _sha256_json(value: Any) -> str:
 
 def _implementation_identities() -> dict[str, Any]:
     repo = contract.REPO
+    package = Path(__file__).parent
+    import scipy
+    import sklearn
+    import torch
+
     return {
         "contract": file_identity(Path(contract.__file__)),
         "extractor": file_identity(Path(extractor.__file__)),
         "analyzer": file_identity(Path(analyzer.__file__)),
         "verifier": file_identity(Path(verifier.__file__)),
         "pipeline": file_identity(Path(__file__)),
+        "serial_driver": file_identity(package / "serial_audit.sbatch"),
+        "safe_submit": file_identity(package / "safe_submit.sh"),
         "diagnostic_runner": file_identity(Path(diagnostic_runner.__file__)),
         "diagnostic_cache": file_identity(
             repo / "tools/matched_cancer_diagnostic_20260730/cache.py"
@@ -202,6 +209,17 @@ def _implementation_identities() -> dict[str, Any]:
         "stage_objectives": file_identity(
             repo / "tools/matched_cancer_stage_20260730/objectives.py"
         ),
+        "python_target": file_identity(Path(sys.executable).resolve()),
+        "python_venv_config": file_identity(
+            Path("/admin/home/ryan.kim/nanopath/.venv/pyvenv.cfg")
+        ),
+        "runtime_versions": {
+            "python": sys.version,
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "sklearn": sklearn.__version__,
+            "torch": torch.__version__,
+        },
     }
 
 
