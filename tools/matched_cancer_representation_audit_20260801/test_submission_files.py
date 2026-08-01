@@ -12,6 +12,7 @@ class SubmissionFileTests(unittest.TestCase):
         self.assertEqual(driver.count("#SBATCH --job-name=main_1gpu"), 1)
         self.assertEqual(driver.count("#SBATCH --gpus-per-task=1"), 1)
         self.assertEqual(driver.count("#SBATCH --ntasks=1"), 1)
+        self.assertEqual(driver.count("#SBATCH --mem=64G"), 1)
         self.assertEqual(driver.count("#SBATCH --comment=matched_cancer_rep_audit_20260801"), 1)
         self.assertNotRegex(driver, r"(?im)^#SBATCH\s+--array")
         self.assertNotRegex(driver, r"(?im)^#SBATCH\s+--dependency")
