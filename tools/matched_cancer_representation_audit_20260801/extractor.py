@@ -396,12 +396,13 @@ def read_compact_cache(path: str | os.PathLike[str]) -> tuple[dict[str, Any], np
             embeddings = np.asarray(stored["emb"], dtype=np.float32)
             claimed = str(stored["entry_sha256"].item())
             count = embeddings.shape[0]
+            row_arrays = {field: np.asarray(stored[field]) for field in COMPACT_ROW_FIELDS}
             rows = tuple(
                 {
                     field: (
-                        int(stored[field][index])
+                        int(row_arrays[field][index])
                         if field in {"view_rank", "occurrence_index", "global_index"}
-                        else str(stored[field][index])
+                        else str(row_arrays[field][index])
                     )
                     for field in COMPACT_ROW_FIELDS
                 }
