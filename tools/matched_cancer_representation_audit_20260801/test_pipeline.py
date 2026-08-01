@@ -6,13 +6,86 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import weakref
 
 import numpy as np
 
-from . import analyzer, contract, pipeline
+from . import analyzer, contract, extractor, pipeline
 
 
 class PipelinePrimitiveTests(unittest.TestCase):
+    def test_full_cache_stream_retains_reference_and_subsets_not_candidates(self) -> None:
+        class FakeCache:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+
+        reference = FakeCache(Path("/tmp/reference.npz"))
+        candidate_refs: list[weakref.ReferenceType[FakeCache]] = []
+        reads = 0
+
+        def read_cache(path: Path) -> FakeCache:
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                return reference
+            candidate = FakeCache(Path(path))
+            candidate_refs.append(weakref.ref(candidate))
+            return candidate
+
+        def discover(seed: int, cancer: str, layer: str) -> Path:
+            return Path(f"/tmp/{seed}_{cancer}_{layer}.npz")
+
+        selection = ({"selected": True},)
+        with (
+            mock.patch.object(contract, "FM_SEEDS", (1,)),
+            mock.patch.object(extractor, "discover_final_cache", new=discover),
+            mock.patch.object(extractor, "read_full_cache", new=read_cache),
+            mock.patch.object(
+                extractor,
+                "validate_final_cache_provenance",
+                new=lambda *args, **kwargs: None,
+            ),
+            mock.patch.object(
+                extractor,
+                "assert_same_tile_evidence",
+                new=lambda *args, **kwargs: None,
+            ),
+            mock.patch.object(
+                extractor,
+                "build_selection_rows",
+                new=lambda *args, **kwargs: selection,
+            ),
+            mock.patch.object(
+                extractor,
+                "subset_final_embeddings",
+                new=lambda *args, **kwargs: np.ones((1, 128), dtype=np.float32),
+            ),
+            mock.patch.object(
+                pipeline,
+                "file_identity",
+                new=lambda path: {
+                    "canonical_path": str(path), "bytes": 1, "sha256": "0" * 64
+                },
+            ),
+        ):
+            observed_reference, observed_selection, paths, subsets, identities = (
+                pipeline._stream_cancer_final_caches(
+                    (), cancer="BRCA", retain_subsets=True
+                )
+            )
+        self.assertIs(observed_reference, reference)
+        self.assertEqual(observed_selection, selection)
+        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(subsets), 3)
+        self.assertEqual(len(identities), 3)
+        self.assertEqual(reads, 3)
+        self.assertTrue(candidate_refs)
+        self.assertTrue(all(item() is None for item in candidate_refs))
+        self.assertNotIn(
+            "full_caches",
+            pipeline.ValidatedInputs.__dataclass_fields__,
+        )
+
     def test_faircon_support_reconstructs_two_global_views(self) -> None:
         batch = [
             {"cancer": 2, "race": 2},
@@ -191,7 +264,8 @@ class PipelineStageTests(unittest.TestCase):
             population=tuple(),
             references={},
             selections={},
-            full_caches={},
+            final_cache_paths={},
+            selected_final={},
             source_identities={"one": identity},
         )
 

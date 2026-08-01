@@ -101,7 +101,8 @@ class ValidatedInputs:
     population: tuple[dict[str, str], ...]
     references: dict[str, extractor.FullCache]
     selections: dict[str, tuple[dict[str, Any], ...]]
-    full_caches: dict[tuple[int, str, str], extractor.FullCache]
+    final_cache_paths: dict[tuple[int, str, str], Path]
+    selected_final: dict[tuple[int, str, str], np.ndarray]
     source_identities: dict[str, Any]
 
 
@@ -232,12 +233,73 @@ def _selection_rows(inputs: ValidatedInputs) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
-def _validate_production_inputs() -> ValidatedInputs:
+def _stream_cancer_final_caches(
+    population: Sequence[Mapping[str, str]],
+    *,
+    cancer: str,
+    retain_subsets: bool,
+) -> tuple[
+    extractor.FullCache,
+    tuple[dict[str, Any], ...],
+    dict[tuple[int, str, str], Path],
+    dict[tuple[int, str, str], np.ndarray],
+    dict[str, Any],
+]:
+    """Validate one cancer's 15 full caches while retaining no candidates."""
+    reference_seed = contract.FM_SEEDS[0]
+    reference_path = extractor.discover_final_cache(reference_seed, cancer, "B")
+    reference = extractor.read_full_cache(reference_path)
+    extractor.validate_final_cache_provenance(
+        reference, seed=reference_seed, cancer=cancer, layer="B"
+    )
+    selection = extractor.build_selection_rows(
+        reference, population, cancer=cancer
+    )
+    paths: dict[tuple[int, str, str], Path] = {}
+    selected: dict[tuple[int, str, str], np.ndarray] = {}
+    identities: dict[str, Any] = {}
+    for seed in contract.FM_SEEDS:
+        for layer in ("B", "P", "H"):
+            key = (seed, cancer, layer)
+            if seed == reference_seed and layer == "B":
+                cache = reference
+            else:
+                cache = extractor.read_full_cache(
+                    extractor.discover_final_cache(seed, cancer, layer)
+                )
+                extractor.validate_final_cache_provenance(
+                    cache, seed=seed, cancer=cancer, layer=layer
+                )
+            extractor.assert_same_tile_evidence(reference, cache)
+            paths[key] = cache.path
+            identities[f"{seed}|{cancer}|{layer}"] = file_identity(cache.path)
+            if retain_subsets:
+                selected[key] = extractor.subset_final_embeddings(
+                    cache, selection
+                )
+            if cache is not reference:
+                del cache
+                gc.collect()
+    expected = len(contract.FM_SEEDS) * 3
+    if len(paths) != expected or len(identities) != expected:
+        raise PipelineError(f"{cancer}: final-cache stream topology drift")
+    if retain_subsets and len(selected) != expected:
+        raise PipelineError(f"{cancer}: selected final-cache topology drift")
+    if not retain_subsets and selected:
+        raise AssertionError("preflight unexpectedly retained selected embeddings")
+    return reference, selection, paths, selected, identities
+
+
+def _validate_production_inputs(
+    *, retain_final_subsets: bool
+) -> ValidatedInputs:
     population = tuple(dict(row) for row in contract.load_sanitized_population())
     contract.validate_frozen_population(population)
 
-    full: dict[tuple[int, str, str], extractor.FullCache] = {}
     references: dict[str, extractor.FullCache] = {}
+    selections: dict[str, tuple[dict[str, Any], ...]] = {}
+    final_paths: dict[tuple[int, str, str], Path] = {}
+    selected_final: dict[tuple[int, str, str], np.ndarray] = {}
     seed_states: dict[str, Any] = {}
     final_identities: dict[str, Any] = {}
     for seed in contract.FM_SEEDS:
@@ -246,29 +308,29 @@ def _validate_production_inputs() -> ValidatedInputs:
             "encoders": encoder_hashes,
             "adapters": adapter_hashes,
         }
-        for cancer in contract.CANCERS:
-            for layer in ("B", "P", "H"):
-                cache = extractor.read_full_cache(
-                    extractor.discover_final_cache(seed, cancer, layer)
-                )
-                extractor.validate_final_cache_provenance(
-                    cache, seed=seed, cancer=cancer, layer=layer
-                )
-                reference = references.setdefault(cancer, cache)
-                extractor.assert_same_tile_evidence(reference, cache)
-                full[(seed, cancer, layer)] = cache
-                final_identities[f"{seed}|{cancer}|{layer}"] = file_identity(
-                    cache.path
-                )
-    if len(full) != EXPECTED_FULL_CACHES:
-        raise PipelineError("full-cache topology must contain exactly 30 caches")
-
-    selections = {
-        cancer: extractor.build_selection_rows(
-            references[cancer], population, cancer=cancer
+    for cancer in contract.CANCERS:
+        reference, selection, paths, subsets, identities = (
+            _stream_cancer_final_caches(
+                population,
+                cancer=cancer,
+                retain_subsets=retain_final_subsets,
+            )
         )
-        for cancer in contract.CANCERS
-    }
+        selections[cancer] = selection
+        final_paths.update(paths)
+        selected_final.update(subsets)
+        final_identities.update(identities)
+        if retain_final_subsets:
+            references[cancer] = reference
+        else:
+            del reference
+            gc.collect()
+    if len(final_paths) != EXPECTED_FULL_CACHES:
+        raise PipelineError("full-cache topology must contain exactly 30 paths")
+    if retain_final_subsets and len(selected_final) != EXPECTED_FULL_CACHES:
+        raise PipelineError("run must retain exactly 30 selected final subsets")
+    if not retain_final_subsets and (references or selected_final):
+        raise PipelineError("preflight retained full-cache arrays")
     combined = tuple(
         row for cancer in contract.CANCERS for row in selections[cancer]
     )
@@ -328,7 +390,8 @@ def _validate_production_inputs() -> ValidatedInputs:
         population=population,
         references=references,
         selections=selections,
-        full_caches=full,
+        final_cache_paths=final_paths,
+        selected_final=selected_final,
         source_identities=sources,
     )
 
@@ -361,7 +424,7 @@ def preflight(
         raise PipelineError("launch nonce must contain exactly 128 lowercase-hex bits")
     root = Path(output_root)
     receipt_path = root / "PREFLIGHT_RECEIPT.json"
-    inputs = _validate_production_inputs()
+    inputs = _validate_production_inputs(retain_final_subsets=False)
     selection = _selection_rows(inputs)
     receipt = {
         "schema": PREFLIGHT_SCHEMA,
@@ -473,10 +536,7 @@ def _extract_all(
         for layer in ("B", "P", "H"):
             values = np.concatenate(
                 [
-                    extractor.subset_final_embeddings(
-                        inputs.full_caches[(seed, cancer, layer)],
-                        inputs.selections[cancer],
-                    )
+                    inputs.selected_final[(seed, cancer, layer)]
                     for cancer in contract.CANCERS
                 ],
                 axis=0,
@@ -489,7 +549,7 @@ def _extract_all(
                 "checkpoint": file_identity(paths["checkpoints"][layer]),
                 "full_caches": {
                     cancer: file_identity(
-                        inputs.full_caches[(seed, cancer, layer)].path
+                        inputs.final_cache_paths[(seed, cancer, layer)]
                     )
                     for cancer in contract.CANCERS
                 },
@@ -1002,7 +1062,7 @@ def run(
     if str(device).startswith("cuda"):
         _validate_cuda_allocation(preflight_value)
     preflight_path = root / "PREFLIGHT_RECEIPT.json"
-    inputs = _validate_production_inputs()
+    inputs = _validate_production_inputs(retain_final_subsets=True)
     if inputs.source_identities != preflight_value["sources"]:
         raise PipelineError("current validated sources differ from preflight")
     if _sha256_json(inputs.population) != preflight_value["population_sha256"]:
@@ -1023,9 +1083,8 @@ def run(
         root, inputs, device=device, batch_size=int(batch_size)
     )
     population = inputs.population
-    # Full production caches are intentionally retained only through extraction.
-    # Keeping all 30 arrays resident during the multi-hour probe analysis would
-    # consume more than 12 GB for evidence that has already been compacted.
+    # The two full references and small selected subsets are retained only through
+    # extraction, then released before the multi-hour probe analysis.
     del inputs
     gc.collect()
     metric_value = _metric_input(
