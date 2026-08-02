@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pathology-fairness-timing"
 version = "0.1.0"
 description = "Reusable objectives for matched fairness-intervention timing studies."
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.2"]
 
@@ -23,5 +24,12 @@ research = [
 ]
 test = ["pytest>=8", "pyyaml>=6"]
 
+[project.urls]
+Repository = "https://github.com/RyanKim17920/pathology-fairness-timing"
+Documentation = "https://github.com/RyanKim17920/pathology-fairness-timing/blob/master/docs/REPRODUCIBILITY.md"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
