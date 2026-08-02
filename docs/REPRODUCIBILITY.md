@@ -62,8 +62,9 @@ row counts, byte totals, local size inventories, and exact Arrow field types,
 hashes every file against the pinned LFS content manifest, then writes
 machine-readable receipts. Initial validation therefore rereads every downloaded
 byte once. Add `--deep-validate` for a first-row nonempty-payload check. Later
-TCGA runs quickly recheck the receipt and name/size/modification fingerprint;
-changed files must be fully revalidated before use.
+TCGA runs quickly recheck the receipt's name, size, modification/change-time,
+device, and inode fingerprint; changed or replaced files must be fully
+revalidated before use.
 
 The metadata receipt records the exact GDC query, retrieval time, canonical
 response digest, task/class counts, BRCA subtype inclusion and exclusion counts,

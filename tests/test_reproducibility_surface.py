@@ -1,6 +1,7 @@
 import csv
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import types
@@ -206,6 +207,7 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
     shard = cohort / "00000000.parquet"
     original_payload = b"parquet-placeholder"
     shard.write_bytes(original_payload)
+    original_stat = shard.stat()
     inventory = data_contracts.local_inventory(tmp_path, "downstream")
     spec = data_contracts.DATASETS["downstream"]
     monkeypatch.setitem(spec, "expected_files", 1)
@@ -240,6 +242,10 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
     contaminant.unlink()
 
     shard.write_bytes(b"x" * len(original_payload))
+    os.utime(
+        shard,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
     with pytest.raises(ValueError, match="local inventory"):
         data_contracts.validate_dataset_receipt(tmp_path, "downstream")
 

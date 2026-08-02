@@ -84,11 +84,15 @@ def local_inventory(root: Path, dataset: str) -> dict[str, Any]:
     ]
     names = "".join(f"{name}\n" for name, _ in rows).encode()
     inventory = "".join(f"{name}\t{size}\n" for name, size in rows).encode()
-    stat_inventory = "".join(
-        f"{path.relative_to(root).as_posix()}\t{path.stat().st_size}\t"
-        f"{path.stat().st_mtime_ns}\n"
-        for path in files
-    ).encode()
+    stat_rows = []
+    for path in files:
+        stat = path.stat()
+        stat_rows.append(
+            f"{path.relative_to(root).as_posix()}\t{stat.st_size}\t"
+            f"{stat.st_mtime_ns}\t{stat.st_ctime_ns}\t{stat.st_dev}\t"
+            f"{stat.st_ino}\n"
+        )
+    stat_inventory = "".join(stat_rows).encode()
     return {
         "file_count": len(rows),
         "manifest_sha256": hashlib.sha256(names).hexdigest(),
