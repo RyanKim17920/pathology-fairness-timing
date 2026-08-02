@@ -28,6 +28,10 @@ PRETRAINING_REVISION = "96a5b33456fd948a0f1c90ee6901d748bde39111"
 PRETRAINING_SHARDS = 200
 DOWNSTREAM_REPO = "medarc/TCGA-12K-parquet"
 DOWNSTREAM_REVISION = "0d5c21631c1375ea9d2fd72355572b9838f7f2dd"
+DOWNSTREAM_FILES = 11_368
+DOWNSTREAM_ROWS = 24_985_184
+DOWNSTREAM_MANIFEST_SHA256 = \
+    "0099d87fcc7162ac678021d71d5ffe3cfb0db40de2719fc834884cf00a6ea8e1"
 GDC_CASES_ENDPOINT = "https://api.gdc.cancer.gov/cases"
 FOLD_SEED = 1337
 RECEIPT_SCHEMA = "pathology-fairness-data/v1"
@@ -44,6 +48,9 @@ DATASETS = {
         "revision": DOWNSTREAM_REVISION,
         "patterns": ["1/*.parquet", "2/*.parquet"],
         "required_columns": {"slide_path", "image_bytes"},
+        "expected_files": DOWNSTREAM_FILES,
+        "expected_rows": DOWNSTREAM_ROWS,
+        "manifest_sha256": DOWNSTREAM_MANIFEST_SHA256,
     },
 }
 
@@ -80,6 +87,19 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonicalize(value):
+    """Normalize unordered API objects before hashing them for provenance."""
+    if isinstance(value, dict):
+        return {key: _canonicalize(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        normalized = [_canonicalize(item) for item in value]
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
+    return value
+
+
 def _parquet_files(root: Path, dataset: str) -> list[Path]:
     patterns = DATASETS[dataset]["patterns"]
     return sorted({path for pattern in patterns for path in root.glob(pattern)})
@@ -104,6 +124,20 @@ def validate_tiles(root: Path, dataset: str, deep: bool = False) -> dict:
                 f"missing={missing[:5]} extra={extra[:5]}"
             )
 
+    relative_paths = [path.relative_to(root).as_posix() for path in files]
+    manifest_sha256 = _sha256_bytes(("\n".join(relative_paths) + "\n").encode())
+    spec = DATASETS[dataset]
+    if "expected_files" in spec and len(files) != spec["expected_files"]:
+        raise ValueError(
+            f"{dataset} file set is incomplete: found={len(files)} "
+            f"expected={spec['expected_files']}"
+        )
+    if "manifest_sha256" in spec and manifest_sha256 != spec["manifest_sha256"]:
+        raise ValueError(
+            f"{dataset} file manifest does not match pinned revision: "
+            f"observed={manifest_sha256} expected={spec['manifest_sha256']}"
+        )
+
     required = DATASETS[dataset]["required_columns"]
     total_rows = 0
     total_bytes = 0
@@ -127,7 +161,11 @@ def validate_tiles(root: Path, dataset: str, deep: bool = False) -> dict:
     if len(schemas) != 1:
         raise ValueError(f"{dataset} shards have {len(schemas)} distinct schemas")
 
-    spec = DATASETS[dataset]
+    if "expected_rows" in spec and total_rows != spec["expected_rows"]:
+        raise ValueError(
+            f"{dataset} row count does not match pinned revision: "
+            f"observed={total_rows} expected={spec['expected_rows']}"
+        )
     return {
         "schema": RECEIPT_SCHEMA,
         "dataset": dataset,
@@ -138,6 +176,7 @@ def validate_tiles(root: Path, dataset: str, deep: bool = False) -> dict:
         },
         "local": {
             "file_count": len(files),
+            "manifest_sha256": manifest_sha256,
             "total_rows": total_rows,
             "total_bytes": total_bytes,
             "columns": list(next(iter(schemas))),
@@ -208,14 +247,20 @@ def download_gdc_cases() -> list[dict]:
     return hits
 
 
-def _brca_label(diagnoses: list[dict]) -> int | None:
+def _brca_classification(diagnoses: list[dict]) -> tuple[int | None, str]:
     names = {str(row.get("primary_diagnosis", "")).strip().lower()
              for row in diagnoses}
     ductal = any("duct" in name and "carcinoma" in name for name in names)
     lobular = any("lobular" in name and "carcinoma" in name for name in names)
-    if ductal == lobular:
-        return None
-    return 0 if ductal else 1
+    if ductal and not lobular:
+        return 0, "IDC"
+    if lobular and not ductal:
+        return 1, "ILC"
+    return None, "ambiguous" if ductal and lobular else "unclassified"
+
+
+def _brca_label(diagnoses: list[dict]) -> int | None:
+    return _brca_classification(diagnoses)[0]
 
 
 def clinical_rows(cases: list[dict]) -> list[dict]:
@@ -238,12 +283,20 @@ def clinical_rows(cases: list[dict]) -> list[dict]:
         if isinstance(days_to_birth, (int, float)):
             age = round(abs(float(days_to_birth)) / 365.25, 4)
         labels = {"nsclc": None, "glioma": None, "brca": None}
+        diagnosis_names = sorted({
+            str(item.get("primary_diagnosis", "")).strip()
+            for item in (case.get("diagnoses") or [])
+            if str(item.get("primary_diagnosis", "")).strip()
+        })
+        brca_subtype = ""
         if cancer in {"LUAD", "LUSC"}:
             labels["nsclc"] = 0 if cancer == "LUAD" else 1
         if cancer in {"LGG", "GBM"}:
             labels["glioma"] = 0 if cancer == "LGG" else 1
         if cancer == "BRCA":
-            labels["brca"] = _brca_label(case.get("diagnoses") or [])
+            labels["brca"], brca_subtype = _brca_classification(
+                case.get("diagnoses") or []
+            )
         row = {
             "patient_barcode": patient_id,
             "cancer": cancer,
@@ -251,6 +304,8 @@ def clinical_rows(cases: list[dict]) -> list[dict]:
             "race": race,
             "gender": str(demographic.get("sex_at_birth", "")).strip(),
             "age_years": age,
+            "primary_diagnoses": "|".join(diagnosis_names),
+            "brca_subtype": brca_subtype,
         }
         for task, label in labels.items():
             row[f"label_{task}"] = "" if label is None else label
@@ -269,15 +324,30 @@ def assign_folds(rows: list[dict], task: str, n_splits: int = 5,
         raise ValueError(f"{task}: expected two label classes")
     rng = random.Random(seed)
     for label in sorted(set(labels)):
-        members = [index for index in selected if int(rows[index][label_column]) == label]
+        members = [index for index in selected
+                   if int(rows[index][label_column]) == label]
         if len(members) < n_splits:
             raise ValueError(
                 f"{task}: class {label} has {len(members)} patients, fewer than "
                 f"n_splits={n_splits}"
             )
-        rng.shuffle(members)
-        for position, index in enumerate(members):
-            rows[index][fold_column] = position % n_splits
+        by_race: dict[str, list[int]] = {}
+        for index in members:
+            by_race.setdefault(rows[index]["race"] or "__missing__", []).append(index)
+        strata: list[list[int]] = []
+        sparse: list[int] = []
+        for race in sorted(by_race):
+            if len(by_race[race]) >= n_splits:
+                strata.append(by_race[race])
+            else:
+                sparse.extend(by_race[race])
+        if sparse:
+            strata.append(sparse)
+        for stratum in strata:
+            rng.shuffle(stratum)
+            offset = rng.randrange(n_splits)
+            for position, index in enumerate(stratum):
+                rows[index][fold_column] = (position + offset) % n_splits
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -304,7 +374,8 @@ def prepare_clinical(metadata_dir: Path, holdout_task: str,
                      fino_path: Path | None = None) -> dict:
     cases = download_gdc_cases()
     source_sha256 = _sha256_bytes(
-        json.dumps(cases, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(_canonicalize(cases), sort_keys=True,
+                   separators=(",", ":")).encode()
     )
     rows = clinical_rows(cases)
     for task in ("nsclc", "glioma", "brca"):
@@ -328,6 +399,24 @@ def prepare_clinical(metadata_dir: Path, holdout_task: str,
         task: sum(row[f"label_{task}"] != "" for row in rows)
         for task in ("nsclc", "glioma", "brca")
     }
+    task_classes = {
+        task: {
+            str(label): sum(row[f"label_{task}"] == label for row in rows)
+            for label in (0, 1)
+        }
+        for task in ("nsclc", "glioma", "brca")
+    }
+    brca_subtypes = {
+        subtype: sum(row["brca_subtype"] == subtype for row in rows)
+        for subtype in ("IDC", "ILC", "ambiguous", "unclassified")
+    }
+    race_missing = {
+        "all_tcga": sum(not row["race"] for row in rows),
+        **{
+            task: sum(not row["race"] and row[f"label_{task}"] != "" for row in rows)
+            for task in ("nsclc", "glioma", "brca")
+        },
+    }
     receipt = {
         "schema": RECEIPT_SCHEMA,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -340,6 +429,9 @@ def prepare_clinical(metadata_dir: Path, holdout_task: str,
         "fold_seed": FOLD_SEED,
         "patients": len(rows),
         "task_patients": counts,
+        "task_class_counts": task_classes,
+        "brca_subtype_counts": brca_subtypes,
+        "race_missing_counts": race_missing,
         "holdout_task": holdout_task,
         "holdout_patients": len(holdout),
         "outputs": {
