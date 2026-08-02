@@ -130,6 +130,25 @@ def test_tile_validation_checks_complete_schema(tmp_path):
         raise AssertionError("incomplete shard set was accepted")
 
 
+def test_downstream_validation_rejects_partial_mirror(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    prepare = load_script("prepare_data.py")
+    cohort = tmp_path / "1"
+    cohort.mkdir()
+    pq.write_table(
+        pa.table({"slide_path": ["TCGA-AA-0001.svs"], "image_bytes": [b"jpeg"]}),
+        cohort / "00000000.parquet",
+    )
+    try:
+        prepare.validate_tiles(tmp_path, "downstream")
+    except ValueError as error:
+        assert "incomplete" in str(error)
+    else:
+        raise AssertionError("partial downstream mirror was accepted")
+
+
 def test_gdc_metadata_and_folds_are_deterministic(tmp_path, monkeypatch):
     prepare = load_script("prepare_data.py")
     cases = []
@@ -157,6 +176,7 @@ def test_gdc_metadata_and_folds_are_deterministic(tmp_path, monkeypatch):
 
     first = prepare.clinical_rows(cases)
     second = prepare.clinical_rows(list(reversed(cases)))
+    assert prepare._canonicalize(cases) == prepare._canonicalize(list(reversed(cases)))
     for task in ("nsclc", "glioma", "brca"):
         prepare.assign_folds(first, task)
         prepare.assign_folds(second, task)
@@ -170,6 +190,8 @@ def test_gdc_metadata_and_folds_are_deterministic(tmp_path, monkeypatch):
         tmp_path / "metadata", "brca", tmp_path / "tiles" / "fino_meta.json"
     )
     assert len(receipt["source"]["canonical_response_sha256"]) == 64
+    assert receipt["task_class_counts"]["brca"] == {"0": 10, "1": 10}
+    assert receipt["brca_subtype_counts"]["ambiguous"] == 0
     for artifact in receipt["outputs"].values():
         assert Path(artifact["path"]).is_file()
         assert len(artifact["sha256"]) == 64
@@ -199,3 +221,16 @@ def test_posthoc_reads_every_parquet_row_group(tmp_path):
     )
     assert [payload for _, payload in task] == [b"one", b"two", b"three"]
     assert pool == []
+
+
+def test_subgroup_power_requires_both_outcome_classes(monkeypatch):
+    fairness = load_script("fairness_eval.py")
+    monkeypatch.setattr(fairness, "_safe_auc", lambda _y, _p: 0.5)
+    report = fairness.subgroup_report(
+        [0] * 30 + [1], [0.1] * 30 + [0.9], ["Black"] * 31,
+        min_n=15, min_class_n=5,
+    )
+    subgroup = report["subgroups"]["Black"]
+    assert subgroup["n"] == 31
+    assert subgroup["n_pos"] == 1
+    assert subgroup["low_power"]

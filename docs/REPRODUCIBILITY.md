@@ -1,7 +1,7 @@
 # Reproducing the study
 
 This repository provides the training, data preparation, post-hoc intervention,
-and evaluation paths for a matched comparison of fairness intervention timing.
+and evaluation paths for studying fairness intervention timing.
 It intentionally contains no result claims or private patient artifacts.
 
 ## 1. Install
@@ -37,22 +37,32 @@ This creates:
 The two training recipes both use the generated holdout file, so downstream
 patients are absent from both the plain and fairness-pretrained encoders.
 
-The downstream TCGA-12K tile mirror is approximately 703 GB and is therefore an
-explicit opt-in:
+The downstream TCGA-12K tile mirror contains 11,368 Parquet files and
+24,985,184 patches (approximately 703 GB), so it is an explicit opt-in:
 
 ```bash
 python scripts/prepare_data.py all --download-downstream
 ```
 
 It is stored under `data/downstream_tiles`. Downloads are resumable through
-`huggingface_hub`. Both tile datasets are pinned to exact repository revisions,
-validated for file completeness, Parquet schema, non-empty row counts, and
-recorded in machine-readable receipts. For a more expensive first-row payload
-check, add `--deep-validate`.
+`huggingface_hub`. Both tile datasets are pinned to exact repository revisions.
+Validation enforces the complete 200-file pretraining shard set and the pinned
+downstream file-manifest digest and row count, checks Parquet schemas and
+non-empty files, and records machine-readable receipts. For a more expensive
+first-row payload check, add `--deep-validate`.
 
 The metadata receipt records the exact GDC query, retrieval time, a canonical
-response digest, and SHA-256 digests for each derived artifact. This makes a
-run auditable even if the live clinical API changes later.
+response digest, task/class counts, BRCA subtype inclusion and exclusion
+counts, race missingness, and SHA-256 digests for every derived artifact. The
+CSV retains the source primary-diagnosis strings used by the deterministic
+IDC-versus-ILC mapping. This makes a run auditable even if the live clinical API
+changes later. The API response itself is not redistributed, so retain the
+generated CSV and receipt with each study run.
+
+Folds are deterministic and patient-level. They stratify each task label by
+race when a race/label cell has at least five patients; smaller cells are
+distributed within the label stratum. Missing race remains explicit in the CSV
+and receipt rather than being silently reassigned.
 
 Individual stages are also available:
 
@@ -84,13 +94,16 @@ WANDB_MODE=offline python pretraining/train.py \
   configs/pretrain_cancer_conditioned_race.yaml
 ```
 
-The configs have identical datasets, patient exclusions, model, optimization,
-augmentations, split seed, and compute budgets. The only substantive difference
-is the intervention block. The fairness arm preserves cancer identity while
-reducing race signal; it does not receive a downstream diagnosis label.
+The two pretraining configs have identical datasets, patient exclusions, model,
+optimization, augmentations, split seed, and compute budgets. Their only
+substantive difference is the intervention block. The fairness objective
+conditions its race-pair construction on cancer identity; that constraint is
+not, by itself, evidence that cancer utility is preserved. The fairness branch
+does not receive a downstream diagnosis label.
 
 The first run downloads Meta's public DINOv2 register-token initialization into
-the standard PyTorch cache. Subsequent runs reuse it.
+the standard PyTorch cache and verifies its pinned SHA-256 digest before loading
+it. Subsequent runs recheck and reuse the cached file.
 
 ## 4. Run the matched post-hoc arm
 
@@ -108,6 +121,7 @@ python scripts/post_hoc_debias.py \
   --adversary-data matched_pool \
   --method contrastive \
   --condition-col cancer_type \
+  --proto-temp 0.2 \
   --lambda-adv 0.1 \
   --dump-predictions outputs/posthoc/predictions.jsonl \
   --out outputs/posthoc/summary.json
@@ -132,7 +146,10 @@ python scripts/fairness_eval.py \
 
 Repeat with the fairness-pretrained checkpoint on the same fold. Predictions
 are patient-pooled and are suitable for paired tests because both arms use the
-same generated patient folds.
+same generated patient folds. Run all five held-out folds before drawing a
+cohort-level conclusion. The evaluator flags a subgroup as low-power when it
+has fewer than 15 total patients or fewer than five patients in either outcome
+class; flagged cells are reported but excluded from disparity aggregates.
 
 ## 6. Repeated post-hoc heads
 
@@ -161,6 +178,7 @@ python scripts/reliable_fairness_head.py \
   --adversary-data matched_pool \
   --method contrastive \
   --condition-col cancer_type \
+  --proto-temp 0.2 \
   --lambda-adv 0.1 \
   --out outputs/posthoc/seed-1.json
 ```
@@ -176,3 +194,13 @@ metadata and fold construction, pinned downloader arguments, Parquet validation,
 CLI loading, and absence of personal absolute paths. A scientific run still
 requires the documented storage and compute budget; tests do not substitute for
 running the complete experiment.
+
+The pretraining and post-hoc interventions share the same cancer-conditioned
+race-pair definition and temperature, but they do not operate in identical
+parameter spaces: pretraining changes the encoder representation, whereas the
+post-hoc objective changes a downstream head on a frozen encoder and sees the
+task label through that head. Consequently, this workflow supports an
+operational timing study, not an assumption-free causal attribution to timing
+alone. A reported study must predeclare its paired estimand, utility guardrail,
+seed/fold aggregation, confidence interval, and multiplicity policy; none is
+implied by the example commands.
