@@ -28,6 +28,7 @@ from pathology_fairness.data_contracts import (
     PRETRAINING_REVISION,
     RECEIPT_SCHEMA,
     dataset_files,
+    local_content_manifest,
     local_inventory,
 )
 
@@ -127,6 +128,13 @@ def validate_tiles(root: Path, dataset: str, deep: bool = False) -> dict:
             f"{dataset} byte total does not match pinned revision: "
             f"observed={inventory['total_bytes']} expected={spec['expected_bytes']}"
         )
+    content_manifest_sha256 = local_content_manifest(root, dataset)
+    if content_manifest_sha256 != spec["lfs_manifest_sha256"]:
+        raise ValueError(
+            f"{dataset} content does not match the pinned LFS manifest: "
+            f"observed={content_manifest_sha256} "
+            f"expected={spec['lfs_manifest_sha256']}"
+        )
 
     expected_schema = spec["schema"]
     total_rows = 0
@@ -168,6 +176,7 @@ def validate_tiles(root: Path, dataset: str, deep: bool = False) -> dict:
         },
         "local": {
             **inventory,
+            "content_manifest_sha256": content_manifest_sha256,
             "total_rows": total_rows,
             "schema": expected_schema,
             "deep_sample_validation": bool(deep),

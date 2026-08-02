@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-RECEIPT_SCHEMA = "pathology-fairness-data/v2"
+RECEIPT_SCHEMA = "pathology-fairness-data/v3"
 PRETRAINING_REVISION = "96a5b33456fd948a0f1c90ee6901d748bde39111"
 DOWNSTREAM_REVISION = "0d5c21631c1375ea9d2fd72355572b9838f7f2dd"
 
@@ -75,7 +75,7 @@ def dataset_files(root: Path, dataset: str) -> list[Path]:
 
 
 def local_inventory(root: Path, dataset: str) -> dict[str, Any]:
-    """Summarize names and sizes without rereading hundreds of GB of payloads."""
+    """Summarize names, sizes, and modification state without reading payloads."""
     root = Path(root).resolve()
     files = dataset_files(root, dataset)
     rows = [
@@ -84,12 +84,30 @@ def local_inventory(root: Path, dataset: str) -> dict[str, Any]:
     ]
     names = "".join(f"{name}\n" for name, _ in rows).encode()
     inventory = "".join(f"{name}\t{size}\n" for name, size in rows).encode()
+    stat_inventory = "".join(
+        f"{path.relative_to(root).as_posix()}\t{path.stat().st_size}\t"
+        f"{path.stat().st_mtime_ns}\n"
+        for path in files
+    ).encode()
     return {
         "file_count": len(rows),
         "manifest_sha256": hashlib.sha256(names).hexdigest(),
         "inventory_sha256": hashlib.sha256(inventory).hexdigest(),
+        "stat_inventory_sha256": hashlib.sha256(stat_inventory).hexdigest(),
         "total_bytes": sum(size for _, size in rows),
     }
+
+
+def local_content_manifest(root: Path, dataset: str) -> str:
+    """Hash every local file using the Hugging Face LFS manifest format."""
+    root = Path(root).resolve()
+    payload = []
+    for path in dataset_files(root, dataset):
+        relative = path.relative_to(root).as_posix()
+        payload.append(
+            f"{relative}\t{path.stat().st_size}\t{sha256_file(path)}\n"
+        )
+    return hashlib.sha256("".join(payload).encode()).hexdigest()
 
 
 def validate_dataset_receipt(root: Path, dataset: str) -> dict[str, Any]:
@@ -116,6 +134,7 @@ def validate_dataset_receipt(root: Path, dataset: str) -> dict[str, Any]:
         "total_rows": spec["expected_rows"],
         "total_bytes": spec["expected_bytes"],
         "manifest_sha256": spec["manifest_sha256"],
+        "content_manifest_sha256": spec["lfs_manifest_sha256"],
     }
     observed = {
         "schema": receipt.get("schema"),
@@ -127,6 +146,7 @@ def validate_dataset_receipt(root: Path, dataset: str) -> dict[str, Any]:
         "total_rows": local.get("total_rows"),
         "total_bytes": local.get("total_bytes"),
         "manifest_sha256": local.get("manifest_sha256"),
+        "content_manifest_sha256": local.get("content_manifest_sha256"),
     }
     if observed != required:
         raise ValueError(
@@ -142,7 +162,10 @@ def validate_dataset_receipt(root: Path, dataset: str) -> dict[str, Any]:
             f"{relative[:5]}"
         )
     current = local_inventory(root, dataset)
-    for field in ("file_count", "manifest_sha256", "inventory_sha256", "total_bytes"):
+    for field in (
+        "file_count", "manifest_sha256", "inventory_sha256",
+        "stat_inventory_sha256", "total_bytes",
+    ):
         if current[field] != local.get(field):
             raise ValueError(
                 f"{dataset} local inventory no longer matches its receipt: {field}"
