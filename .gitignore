@@ -8,6 +8,8 @@ build/
 dist/
 data/
 outputs/
+.cache/
+wandb/
 checkpoints/
 *.pt
 *.pth
