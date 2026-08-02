@@ -59,9 +59,11 @@ primary runner requires it and checks prediction coverage against it.
 Downloads are resumable. Both tile datasets are pinned to exact repository
 revisions and remote LFS content manifests. Validation enforces names, file and
 row counts, byte totals, local size inventories, and exact Arrow field types,
-then writes machine-readable receipts. Add `--deep-validate` for a first-row
-nonempty-payload check. Every TCGA evaluator rechecks the downstream receipt and
-current local inventory before reading tiles.
+hashes every file against the pinned LFS content manifest, then writes
+machine-readable receipts. Initial validation therefore rereads every downloaded
+byte once. Add `--deep-validate` for a first-row nonempty-payload check. Later
+TCGA runs quickly recheck the receipt and name/size/modification fingerprint;
+changed files must be fully revalidated before use.
 
 The metadata receipt records the exact GDC query, retrieval time, canonical
 response digest, task/class counts, BRCA subtype inclusion and exclusion counts,
@@ -123,7 +125,8 @@ diagnosis label.
 The first run downloads Meta's public DINOv2 register-token initialization and
 verifies its pinned SHA-256 digest before loading it. Training refuses to
 overwrite a nonempty output directory and verifies the dataset, metadata,
-holdout, and FINO receipts before GPU work.
+holdout, and FINO receipts before GPU work. It also requires a clean tracked Git
+tree, records that commit in checkpoints, and snapshots only tracked source.
 
 A configured resume must match the checkpoint's scientific config, source
 commit, input receipts, and RNG record. It restores model, optimizer, counter,
@@ -239,6 +242,9 @@ python scripts/analyze_timing.py \
   --control outputs/timing/control-seed1.jsonl \
   --pretraining outputs/timing/pretraining-seed1.jsonl \
   --posthoc outputs/timing/posthoc-seed1.jsonl \
+  --control-results outputs/timing/control-seed1.json \
+  --pretraining-results outputs/timing/pretraining-seed1.json \
+  --posthoc-results outputs/timing/posthoc-seed1.json \
   --sensitive race \
   --bootstrap 2000 \
   --out outputs/timing/analysis.json
@@ -247,8 +253,10 @@ python scripts/analyze_timing.py \
 For multiple seeds, declare them before running and list every file after its
 corresponding arm flag. The
 analyzer requires identical patients, labels, and subgroup assignments; reports
-each seed; uses a hierarchical paired bootstrap over patients and head seeds;
-and evaluates one primary timing estimand plus an AUROC non-inferiority guardrail.
+each seed; verifies the reliable-run sidecars, prediction hashes, arm lambdas,
+checkpoint roles, seed order, and outer folds; uses a hierarchical paired
+bootstrap over patients and head seeds; and evaluates one primary timing
+estimand plus an AUROC non-inferiority guardrail.
 Positive primary values favor pretraining.
 
 The default support thresholds—15 total and five patients per outcome class—are
