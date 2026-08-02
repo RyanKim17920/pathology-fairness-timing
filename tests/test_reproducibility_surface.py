@@ -163,6 +163,10 @@ def test_tile_validation_checks_complete_schema(tmp_path, monkeypatch):
         spec, "expected_bytes",
         sum(path.stat().st_size for path in tmp_path.glob("*.parquet")),
     )
+    monkeypatch.setitem(
+        spec, "lfs_manifest_sha256",
+        prepare.local_content_manifest(tmp_path, "pretraining"),
+    )
     receipt = prepare.validate_tiles(tmp_path, "pretraining", deep=True)
     assert receipt["local"]["file_count"] == prepare.PRETRAINING_SHARDS
     assert receipt["local"]["total_rows"] == prepare.PRETRAINING_SHARDS
@@ -200,13 +204,16 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
     cohort = tmp_path / "1"
     cohort.mkdir()
     shard = cohort / "00000000.parquet"
-    shard.write_bytes(b"parquet-placeholder")
+    original_payload = b"parquet-placeholder"
+    shard.write_bytes(original_payload)
     inventory = data_contracts.local_inventory(tmp_path, "downstream")
     spec = data_contracts.DATASETS["downstream"]
     monkeypatch.setitem(spec, "expected_files", 1)
     monkeypatch.setitem(spec, "expected_rows", 7)
     monkeypatch.setitem(spec, "expected_bytes", inventory["total_bytes"])
     monkeypatch.setitem(spec, "manifest_sha256", inventory["manifest_sha256"])
+    content_manifest = data_contracts.local_content_manifest(tmp_path, "downstream")
+    monkeypatch.setitem(spec, "lfs_manifest_sha256", content_manifest)
     receipt = {
         "schema": data_contracts.RECEIPT_SCHEMA,
         "dataset": "downstream",
@@ -215,7 +222,11 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
             "revision": spec["revision"],
             "lfs_manifest_sha256": spec["lfs_manifest_sha256"],
         },
-        "local": {**inventory, "total_rows": 7},
+        "local": {
+            **inventory,
+            "total_rows": 7,
+            "content_manifest_sha256": content_manifest,
+        },
     }
     (tmp_path / "DATASET_RECEIPT.json").write_text(json.dumps(receipt))
     identity = data_contracts.validate_dataset_receipt(tmp_path, "downstream")
@@ -228,7 +239,7 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
         data_contracts.validate_dataset_receipt(tmp_path, "downstream")
     contaminant.unlink()
 
-    shard.write_bytes(b"changed-size")
+    shard.write_bytes(b"x" * len(original_payload))
     with pytest.raises(ValueError, match="local inventory"):
         data_contracts.validate_dataset_receipt(tmp_path, "downstream")
 
@@ -397,6 +408,25 @@ def test_training_refuses_to_overwrite_nonempty_output(tmp_path):
     with pytest.raises(FileExistsError, match="refusing to overwrite"):
         trainer.prepare_output_dir(output, resume_path=None)
     assert (output / "result.json").is_file()
+
+
+def test_pretraining_requires_clean_tracked_source(tmp_path, monkeypatch):
+    trainer = load_module(ROOT / "pretraining" / "train.py")
+    responses = iter([
+        types.SimpleNamespace(returncode=0, stdout="a" * 40 + "\n"),
+        types.SimpleNamespace(returncode=0),
+        types.SimpleNamespace(returncode=0),
+    ])
+    monkeypatch.setattr(trainer.subprocess, "run", lambda *_args, **_kwargs: next(responses))
+    assert trainer.clean_source_commit(tmp_path) == "a" * 40
+
+    dirty = iter([
+        types.SimpleNamespace(returncode=0, stdout="b" * 40 + "\n"),
+        types.SimpleNamespace(returncode=1),
+    ])
+    monkeypatch.setattr(trainer.subprocess, "run", lambda *_args, **_kwargs: next(dirty))
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        trainer.clean_source_commit(tmp_path)
 
 
 def test_training_rejects_incomplete_pretraining_shards(tmp_path):
@@ -687,7 +717,7 @@ def test_timing_analysis_is_paired_and_bootstrapped(tmp_path):
                         handle.write(json.dumps({
                             "patient_id": patient, "y_true": label,
                             "y_score": scores[arm], "race": group,
-                            "sex": "F", "age": 65,
+                            "sex": "F", "age": 65, "outer_fold": index % 5,
                         }) + "\n")
     finally:
         for handle in handles.values():
@@ -709,3 +739,87 @@ def test_timing_analysis_is_paired_and_bootstrapped(tmp_path):
         data["y"], data["groups"], data["scores"], groups, 200, 7
     )
     assert bootstrap["fairness_advantage"]["ci_95"][0] > 0
+
+    runtime = tmp_path / "runtime.json"
+    runtime_declaration = {
+        "study": "test",
+        "fold_seed": 1337,
+        "head_architecture": "linear-relu-dropout-linear",
+        "planned_head_seeds": [1],
+        "primary_estimand": "posthoc_auc_gap_minus_pretraining_auc_gap",
+        "utility_noninferiority_margin": 0.02,
+        "sensitive": "race",
+        "method": "contrastive",
+        "condition_col": "cancer_type",
+        "temperature": 0.2,
+        "posthoc_lambda": 0.1,
+    }
+    runtime.write_text(json.dumps(runtime_declaration))
+    result_paths = {arm: tmp_path / f"{arm}-result.json" for arm in paths}
+    for arm in paths:
+        fairness_enabled = arm == "pretraining"
+        result = {
+            "lambda_adv": 0.1 if arm == "posthoc" else 0.0,
+            "reliable_fairness": {
+                "schema": "reliable-fairness-head/v2",
+                "core_task": "brca",
+                "split_seed": 1337,
+                "head_seed": 1,
+                "outer_fold_count": 5,
+                "prediction_artifact": {
+                    "sha256": analysis.sha256_file(paths[arm]),
+                    "record_count": 40,
+                    "required_outer_folds": list(range(5)),
+                },
+                "checkpoint_identity": {
+                    "sha256": "fair" if fairness_enabled else "plain"
+                },
+                "study_cache_contract": {
+                    "runtime_contract": {
+                        "sha256": analysis.sha256_file(runtime)
+                    },
+                    "checkpoint_training": {
+                        "fairness_intervention": {
+                            "enabled": fairness_enabled,
+                            "objective": (
+                                "contrastive-two-condition"
+                                if fairness_enabled else None
+                            ),
+                            "method": "contrastive" if fairness_enabled else None,
+                            "condition_on": "cancer" if fairness_enabled else None,
+                            "temperature": 0.2 if fairness_enabled else None,
+                        }
+                    },
+                },
+            },
+        }
+        result_paths[arm].write_text(json.dumps(result))
+
+    prediction_lists = {arm: [path] for arm, path in paths.items()}
+    result_lists = {arm: [path] for arm, path in result_paths.items()}
+    provenance = analysis.validate_run_provenance(
+        prediction_lists, result_lists, runtime, runtime_declaration
+    )
+    assert provenance["control"][0]["checkpoint_sha256"] == "plain"
+
+    duplicate_predictions = dict(prediction_lists)
+    duplicate_predictions["pretraining"] = [paths["control"]]
+    with pytest.raises(ValueError, match="same prediction file"):
+        analysis.validate_run_provenance(
+            duplicate_predictions, result_lists, runtime, runtime_declaration
+        )
+
+    swapped_results = dict(result_lists)
+    swapped_results["control"] = [result_paths["pretraining"]]
+    with pytest.raises(ValueError, match="prediction digest mismatch"):
+        analysis.validate_run_provenance(
+            prediction_lists, swapped_results, runtime, runtime_declaration
+        )
+
+    posthoc_result = json.loads(result_paths["posthoc"].read_text())
+    posthoc_result["reliable_fairness"]["head_seed"] = 2
+    result_paths["posthoc"].write_text(json.dumps(posthoc_result))
+    with pytest.raises(ValueError, match="head seed is out of order"):
+        analysis.validate_run_provenance(
+            prediction_lists, result_lists, runtime, runtime_declaration
+        )
