@@ -9,6 +9,12 @@
 # DINO CLS self-distillation loss. It is intentionally trivial
 # (~15 lines) so we have zero runtime dependency on the dinov2 codebase.
 
+import hashlib
+import os
+import tempfile
+import urllib.parse
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +26,10 @@ DINOV2_VARIANTS = {
     "dinov2_vits14_reg": (384, 12, 6, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vits14/dinov2_vits14_reg4_pretrain.pth"),
     "dinov2_vitb14_reg": (768, 12, 12, 37, "mlp", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_reg4_pretrain.pth"),
     "dinov2_vitg14_reg": (1536, 40, 24, 37, "swiglu", True, "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitg14/dinov2_vitg14_reg4_pretrain.pth"),
+}
+DINOV2_SHA256 = {
+    "dinov2_vits14_reg":
+        "f433177089a681826f849f194ece3bb48f4d63fb38d32fc837e3dc7a4e5641fb",
 }
 
 
@@ -187,7 +197,37 @@ class DinoV2ViT(nn.Module):
 # Strict matches our key layout against Meta's; any drift fails loudly per AGENTS.md.
 def load_dinov2_pretrained(model):
     *_, url = DINOV2_VARIANTS[model.variant]
-    state = torch.hub.load_state_dict_from_url(url, progress=False, map_location="cpu")
+    expected = DINOV2_SHA256.get(model.variant)
+    if not expected:
+        raise ValueError(f"no pinned DINOv2 checksum for variant {model.variant!r}")
+    filename = Path(urllib.parse.urlparse(url).path).name
+    checkpoint_dir = Path(torch.hub.get_dir()) / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    cached = checkpoint_dir / filename
+    if not cached.exists():
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=checkpoint_dir, prefix=f".{filename}.", suffix=".tmp"
+        )
+        os.close(descriptor)
+        try:
+            torch.hub.download_url_to_file(
+                url, temporary_name, hash_prefix=expected, progress=False
+            )
+            os.replace(temporary_name, cached)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+    digest_state = hashlib.sha256()
+    with cached.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest_state.update(chunk)
+    digest = digest_state.hexdigest()
+    if digest != expected:
+        raise RuntimeError(
+            f"DINOv2 checkpoint checksum mismatch for {cached}: "
+            f"observed={digest} expected={expected}"
+        )
+    state = torch.load(cached, map_location="cpu", weights_only=True)
     model.load_state_dict(state, strict=True)
     return model
 
