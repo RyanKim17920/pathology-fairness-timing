@@ -7,6 +7,7 @@ name = "pathology-fairness-timing"
 version = "0.1.0"
 description = "Reusable objectives for matched fairness-intervention timing studies."
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = ["torch>=2.2"]
 
