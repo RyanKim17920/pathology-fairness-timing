@@ -8,7 +8,6 @@
 
 import contextlib
 import argparse
-import fnmatch
 import hashlib
 import json
 import math
@@ -631,34 +630,20 @@ def main():
         flush=True,
     )
     source_id = f"nanopath-source-{wandb_run.id}"
-    artifact_ignore = [
-        line.strip() for line in (repo_dir / ".gitignore").read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ] + [".git/", "baselines/", "slurm/", "AGENTS.md"]
-    ignored_roots = [output_dir.resolve(), wandb_dir.resolve()]
-
-    def artifact_ignored(path):
-        if any(path.resolve().is_relative_to(root) for root in ignored_roots):
-            return True
-        rel_path = path.relative_to(repo_dir)
-        if any(part.startswith(".") for part in rel_path.parts):
-            return True
-        rel, name = rel_path.as_posix(), path.name
-        for pat in artifact_ignore:
-            pat = pat.rstrip("/") if pat.endswith("/") else pat
-            if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel, pat) or rel == pat or rel.startswith(pat + "/"):
-                return True
-        return False
-
+    tracked_result = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=repo_dir, capture_output=True, check=False
+    )
+    if tracked_result.returncode != 0:
+        raise RuntimeError("cannot enumerate tracked source files")
     source_files = []
-    for root, dirs, files in os.walk(repo_dir):
-        dirs[:] = sorted(d for d in dirs if not artifact_ignored(Path(root) / d))
-        for name in sorted(files):
-            path = Path(root) / name
-            if artifact_ignored(path):
-                continue
-            rel = path.relative_to(repo_dir)
-            source_files.append((path, rel))
+    for raw_relative in tracked_result.stdout.split(b"\0"):
+        if not raw_relative:
+            continue
+        relative = Path(os.fsdecode(raw_relative))
+        path = repo_dir / relative
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError(f"tracked source is not a regular file: {relative}")
+        source_files.append((path, relative))
     source_snapshot_dir = output_dir / "source_snapshot"
     if source_snapshot_dir.exists():
         shutil.rmtree(source_snapshot_dir)
