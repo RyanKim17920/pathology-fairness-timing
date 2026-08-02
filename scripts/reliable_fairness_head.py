@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Reproducible stability-study wrapper for :mod:`post_hoc_debias`.
+"""Reproducible stability-study runner built on :mod:`post_hoc_debias`.
 
-This module deliberately leaves the provenance-pinned legacy runner unchanged.
-It installs narrowly scoped runtime patches which:
+It installs narrowly scoped runtime safeguards which:
 
 * separate the fixed outer-split seed from the downstream-head seed;
 * restore the head RNG after method-specific auxiliary modules are constructed;
-* replace the legacy cache with an atomic, validated, content-addressed cache;
+* use an atomic, validated, content-addressed cache;
 * attach complete source/cache identities to the result; and
 * annotate OOF predictions with the exact outer fold and available site fields.
 
-The legacy result and prediction calculations are otherwise delegated verbatim.
+The model fitting and prediction calculations are delegated to the core runner.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ import csv
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -30,15 +30,20 @@ from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
+from pathology_fairness.data_contracts import (
+    RECEIPT_SCHEMA,
+    validate_dataset_receipt,
+)
+
 if __package__:
     from . import post_hoc_debias as implementation
 else:
     import post_hoc_debias as implementation
 
 
-RUNNER_SCHEMA = "reliable-fairness-head/v1"
+RUNNER_SCHEMA = "reliable-fairness-head/v2"
 CACHE_SCHEMA = "reliable-fairness-embedding-cache/v2"
-FROZEN_SPLIT_SEED = 288850999
+FROZEN_SPLIT_SEED = 1337
 GENERIC_EXTERNAL_CORE_TASKS = frozenset({"dcis_duke", "cptac_gbm"})
 
 _HEAD_SEED = 1337
@@ -80,7 +85,6 @@ def checkpoint_content_identity(checkpoint: str | os.PathLike[str] | None) -> st
     if not checkpoint:
         _CHECKPOINT_IDENTITY = {
             "kind": "random-init",
-            "canonical_path": None,
             "sha256": None,
             "bytes": 0,
         }
@@ -92,7 +96,6 @@ def checkpoint_content_identity(checkpoint: str | os.PathLike[str] | None) -> st
             )
         _CHECKPOINT_IDENTITY = {
             "kind": "checkpoint",
-            "canonical_path": str(path),
             "sha256": sha256_file(path),
             "bytes": path.stat().st_size,
         }
@@ -183,8 +186,8 @@ def _preprocessing_source_identity() -> dict[str, Any]:
     return {
         "runner_sha256": sha256_file(runner_path),
         "runner_bytes": runner_path.stat().st_size,
-        "legacy_core_sha256": sha256_file(core_path),
-        "legacy_core_bytes": core_path.stat().st_size,
+        "core_sha256": sha256_file(core_path),
+        "core_bytes": core_path.stat().st_size,
         "fairness_eval_sha256": sha256_file(fairness_path),
         "fairness_eval_bytes": fairness_path.stat().st_size,
         "backbone_model_sha256": sha256_file(backbone_path),
@@ -463,7 +466,6 @@ def validated_cached_embed(
 
     file_identity = {
         "logical_role": "pool" if tag.startswith("pool-") else "task",
-        "canonical_path": str(path),
         "cache_key": key,
         "cache_file_sha256": sha256_file(path),
         "bytes": path.stat().st_size,
@@ -518,7 +520,7 @@ def _nested_dump_records(*args: Any, **kwargs: Any) -> dict[str, Any]:
             f"nested predictions require folds 0..4, got {sorted(observed_folds)}"
         )
 
-    # This legacy call trains on all folds except k and evaluates only k.
+    # The core call trains on all folds except k and evaluates only k.
     outer_result = _ORIGINAL_TRAIN_AND_EVAL(*args, **kwargs)
     outer_records = outer_result.get("predictions", [])
     eligible_patients = {str(patient) for patient in bc_task}
@@ -561,7 +563,7 @@ def _nested_dump_records(*args: Any, **kwargs: Any) -> dict[str, Any]:
         str(patient) for patient in bc_task[keep_outer_out]
     }
     for inner_fold in sorted(observed_folds - {outer_fold}):
-        # Removing k from emb_task/bc_task means the legacy ~is_eval training
+        # Removing k from emb_task/bc_task means the core ~is_eval training
         # mask now excludes both k (absent) and j (the requested eval fold).
         inner_values = dict(values)
         inner_values["emb_task"] = emb_task[keep_outer_out]
@@ -671,7 +673,12 @@ def configure_cache_contract(
     hospital_fold: str | None,
     hospital_folds_csv: str | None,
     split_seed: int,
+    head_seed: int,
     runtime_contract: str | os.PathLike[str],
+    demographics_csv: str | os.PathLike[str],
+    tiles_dir: str | os.PathLike[str],
+    checkpoint: str | os.PathLike[str],
+    execution_contract: dict[str, Any],
 ) -> None:
     """Bind the logical study/fold contract into every embedding cache key."""
     global _CACHE_CONTRACT
@@ -684,7 +691,6 @@ def configure_cache_contract(
                 f"{folds_path}"
             )
         folds_identity = {
-            "canonical_path": str(folds_path),
             "sha256": sha256_file(folds_path),
             "bytes": folds_path.stat().st_size,
         }
@@ -695,10 +701,160 @@ def configure_cache_contract(
             f"{runtime_path}"
         )
     runtime_identity = {
-        "canonical_path": str(runtime_path),
         "sha256": sha256_file(runtime_path),
         "bytes": runtime_path.stat().st_size,
     }
+    try:
+        runtime_declaration = json.loads(runtime_path.read_text())
+    except (json.JSONDecodeError, OSError) as error:
+        raise ValueError(f"invalid runtime contract {runtime_path}: {error}") from error
+    if not isinstance(runtime_declaration, dict) or not runtime_declaration:
+        raise ValueError("runtime contract must be a nonempty JSON object")
+    required_fields = {
+        "study", "fold_seed", "head_architecture", "planned_head_seeds",
+        "primary_estimand", "utility_noninferiority_margin", "sensitive",
+        "method", "condition_col", "temperature", "posthoc_lambda",
+    }
+    missing_fields = sorted(required_fields - set(runtime_declaration))
+    if missing_fields:
+        raise ValueError(f"runtime contract is missing fields: {missing_fields}")
+    if int(runtime_declaration["fold_seed"]) != int(split_seed):
+        raise ValueError("runtime contract fold_seed does not match the runner")
+    planned_seeds = [int(seed) for seed in runtime_declaration["planned_head_seeds"]]
+    if (not planned_seeds or len(planned_seeds) > 5
+            or len(set(planned_seeds)) != len(planned_seeds)):
+        raise ValueError("planned_head_seeds must contain one to five unique seeds")
+    if int(head_seed) not in planned_seeds:
+        raise ValueError(f"head seed {head_seed} was not prospectively declared")
+    if runtime_declaration["head_architecture"] != "linear-relu-dropout-linear":
+        raise ValueError("unsupported head_architecture in runtime contract")
+    if runtime_declaration["primary_estimand"] != \
+            "posthoc_auc_gap_minus_pretraining_auc_gap":
+        raise ValueError("runtime contract primary_estimand does not match analyzer")
+    if float(runtime_declaration["utility_noninferiority_margin"]) < 0:
+        raise ValueError("utility_noninferiority_margin must be non-negative")
+    for field in ("sensitive", "method", "condition_col"):
+        if str(runtime_declaration[field]) != str(execution_contract[field]):
+            raise ValueError(f"runtime contract {field} does not match command")
+    if not math.isclose(
+        float(runtime_declaration["temperature"]),
+        float(execution_contract["temperature"]), rel_tol=0, abs_tol=1e-12,
+    ):
+        raise ValueError("runtime contract temperature does not match command")
+    allowed_lambdas = (0.0, float(runtime_declaration["posthoc_lambda"]))
+    if not any(math.isclose(float(execution_contract["lambda_adv"]), value,
+                            rel_tol=0, abs_tol=1e-12)
+               for value in allowed_lambdas):
+        raise ValueError("command lambda is not declared by the runtime contract")
+
+    demographics_path = Path(demographics_csv).expanduser().resolve()
+    if not demographics_path.is_file() or demographics_path.is_symlink():
+        raise FileNotFoundError(
+            f"demographics CSV must be a regular non-symlink file: {demographics_path}"
+        )
+    demographics_identity = {
+        "sha256": sha256_file(demographics_path),
+        "bytes": demographics_path.stat().st_size,
+    }
+    metadata_receipt_identity = None
+    downstream_dataset_identity = None
+    checkpoint_training_identity = None
+    cohort_receipt_identity = None
+    if core_task in {"brca", "nsclc", "glioma"}:
+        downstream_dataset_identity = validate_dataset_receipt(
+            Path(tiles_dir), "downstream"
+        )
+        receipt_path = demographics_path.parent / "METADATA_RECEIPT.json"
+        if not receipt_path.is_file() or receipt_path.is_symlink():
+            raise FileNotFoundError(
+                f"TCGA workflows require the generated metadata receipt: {receipt_path}"
+            )
+        receipt = json.loads(receipt_path.read_text())
+        if (receipt.get("schema") != RECEIPT_SCHEMA
+                or int(receipt.get("fold_seed", -1)) != int(split_seed)):
+            raise ValueError(
+                "metadata receipt schema or fold seed does not match the runner"
+            )
+        if receipt.get("holdout_task") != core_task:
+            raise ValueError(
+                f"metadata holdout_task={receipt.get('holdout_task')} does not "
+                f"match downstream task {core_task}"
+            )
+        expected_digest = (
+            (receipt.get("outputs") or {}).get("demographics_csv") or {}
+        ).get("sha256")
+        if expected_digest != demographics_identity["sha256"]:
+            raise ValueError(
+                "demographics CSV digest does not match METADATA_RECEIPT.json"
+            )
+        metadata_receipt_identity = {
+            "sha256": sha256_file(receipt_path),
+            "bytes": receipt_path.stat().st_size,
+            "schema": receipt.get("schema"),
+            "fold_seed": int(receipt["fold_seed"]),
+        }
+        cohort_receipt_path = demographics_path.parent / "COHORT_RECEIPT.json"
+        if not cohort_receipt_path.is_file() or cohort_receipt_path.is_symlink():
+            raise FileNotFoundError(
+                "TCGA workflows require COHORT_RECEIPT.json; run "
+                "`python scripts/prepare_data.py crosswalk`"
+            )
+        cohort_receipt = json.loads(cohort_receipt_path.read_text())
+        cohort_inputs = cohort_receipt.get("inputs") or {}
+        task_coverage = (cohort_receipt.get("tasks") or {}).get(core_task) or {}
+        labeled_patients = int(task_coverage.get("labeled_patients", -1))
+        patients_with_tiles = int(task_coverage.get("patients_with_tiles", -1))
+        missing_patients = int(task_coverage.get("missing_patients", -1))
+        if (cohort_receipt.get("schema") != "pathology-fairness-cohort/v1"
+                or cohort_inputs.get("downstream_dataset_receipt_sha256")
+                != downstream_dataset_identity["receipt_sha256"]
+                or cohort_inputs.get("demographics_sha256")
+                != demographics_identity["sha256"]
+                or cohort_inputs.get("metadata_receipt_sha256")
+                != metadata_receipt_identity["sha256"]
+                or labeled_patients != int(
+                    (receipt.get("task_patients") or {}).get(core_task, -2)
+                )
+                or patients_with_tiles <= 0
+                or patients_with_tiles + missing_patients != labeled_patients):
+            raise ValueError("cohort coverage receipt does not match study inputs")
+        cohort_receipt_identity = {
+            "sha256": sha256_file(cohort_receipt_path),
+            "bytes": cohort_receipt_path.stat().st_size,
+            "task": core_task,
+            "coverage": task_coverage,
+        }
+        import torch
+
+        checkpoint_path = Path(checkpoint).expanduser().resolve()
+        if not checkpoint_path.is_file() or checkpoint_path.is_symlink():
+            raise FileNotFoundError(
+                f"checkpoint must be a regular file: {checkpoint_path}"
+            )
+        checkpoint_payload = torch.load(
+            checkpoint_path, map_location="cpu", weights_only=True
+        )
+        input_identity = checkpoint_payload.get("input_identity") or {}
+        if input_identity.get("holdout_task") != core_task:
+            raise ValueError(
+                "checkpoint does not prove exclusion of the downstream task"
+            )
+        if input_identity.get("metadata_receipt_sha256") != \
+                metadata_receipt_identity["sha256"]:
+            raise ValueError(
+                "checkpoint metadata receipt does not match evaluation metadata"
+            )
+        checkpoint_training_identity = {
+            "holdout_task": input_identity["holdout_task"],
+            "metadata_receipt_sha256": input_identity["metadata_receipt_sha256"],
+            "pretraining_revision": input_identity.get("pretraining_revision"),
+            "pretraining_inventory_sha256": input_identity.get(
+                "pretraining_inventory_sha256"
+            ),
+            "pretraining_lfs_manifest_sha256": input_identity.get(
+                "pretraining_lfs_manifest_sha256"
+            ),
+        }
     _CACHE_CONTRACT = {
         "study_task": str(study_task),
         "core_task": str(core_task),
@@ -708,6 +864,12 @@ def configure_cache_contract(
         "hospital_folds_csv": folds_identity,
         "split_seed": int(split_seed),
         "runtime_contract": runtime_identity,
+        "runtime_declaration": runtime_declaration,
+        "demographics_csv": demographics_identity,
+        "metadata_receipt": metadata_receipt_identity,
+        "downstream_dataset": downstream_dataset_identity,
+        "checkpoint_training": checkpoint_training_identity,
+        "cohort_receipt": cohort_receipt_identity,
     }
 
 
@@ -745,15 +907,15 @@ def _replace_option(arguments: list[str], option: str, value: str) -> list[str]:
 
 
 def resolve_task_mapping(
-    legacy_arguments: Sequence[str],
+    core_arguments: Sequence[str],
     study_task: str | None,
     core_task: str | None,
 ) -> tuple[list[str], str, str]:
     """Resolve an explicit external adapter without silently remapping tasks."""
-    arguments = list(legacy_arguments)
+    arguments = list(core_arguments)
     requested_task = _option_value(arguments, "--task")
     if requested_task is None:
-        raise ValueError("legacy --task is required")
+        raise ValueError("core --task is required")
     if core_task is not None:
         if core_task not in GENERIC_EXTERNAL_CORE_TASKS:
             raise ValueError(
@@ -857,8 +1019,8 @@ def annotate_predictions(
     else:
         observed_folds = {int(record["outer_fold"]) for record in records}
         summary = {
-            "mode": "legacy_oof",
-            "schema": "legacy-oof/v1",
+            "mode": "oof",
+            "schema": "oof/v1",
             "record_count": len(records),
             "unique_patient_count": len(seen),
             "role_counts": None,
@@ -1065,23 +1227,27 @@ def main() -> None:
     parser.add_argument("--site-metadata-csv")
     parser.add_argument("--runtime-contract", required=True)
     parser.add_argument("--nested-predictions", action="store_true")
-    own, legacy = parser.parse_known_args()
+    own, core_arguments = parser.parse_known_args()
     if own.split_seed != FROZEN_SPLIT_SEED:
         parser.error(
             f"--split-seed is frozen at {FROZEN_SPLIT_SEED} for this runner"
         )
     try:
-        legacy, study_task, core_task = resolve_task_mapping(
-            legacy, own.study_task, own.core_task
+        core_arguments, study_task, core_task = resolve_task_mapping(
+            core_arguments, own.study_task, own.core_task
         )
     except ValueError as error:
         parser.error(str(error))
 
-    requested_out_value = _option_value(legacy, "--out")
+    requested_out_value = _option_value(core_arguments, "--out")
     if requested_out_value is None:
-        parser.error("legacy --out is required")
-    requested_predictions_value = _option_value(legacy, "--dump-predictions")
-    adversary_data_value = _option_value(legacy, "--adversary-data")
+        parser.error("core --out is required")
+    requested_predictions_value = _option_value(core_arguments, "--dump-predictions")
+    if not requested_predictions_value:
+        parser.error(
+            "core --dump-predictions is required for paired research analysis"
+        )
+    adversary_data_value = _option_value(core_arguments, "--adversary-data")
     if own.nested_predictions:
         if not requested_predictions_value:
             parser.error("--nested-predictions requires --dump-predictions")
@@ -1089,17 +1255,28 @@ def main() -> None:
             parser.error(
                 "--nested-predictions requires --adversary-data task_only"
             )
-    demographics_value = _option_value(legacy, "--demographics-csv")
+    demographics_value = _option_value(core_arguments, "--demographics-csv")
     if not demographics_value:
-        parser.error("legacy --demographics-csv is required")
-    hospital_metadata_value = _option_value(legacy, "--hospital-folds-csv")
-    hospital_fold_value = _option_value(legacy, "--hospital-fold")
+        parser.error("core --demographics-csv is required")
+    tiles_value = _option_value(core_arguments, "--tiles-dir")
+    if not tiles_value:
+        parser.error("core --tiles-dir is required")
+    checkpoint_value = _option_value(core_arguments, "--checkpoint")
+    if not checkpoint_value:
+        parser.error(
+            "the reliable research runner requires --checkpoint; use the core "
+            "runner directly for random-initialization plumbing smokes"
+        )
+    hospital_metadata_value = _option_value(core_arguments, "--hospital-folds-csv")
+    hospital_fold_value = _option_value(core_arguments, "--hospital-fold")
     if hospital_fold_value and not hospital_metadata_value:
         parser.error("--hospital-fold requires --hospital-folds-csv")
 
     output_path = Path(requested_out_value).expanduser().resolve()
     working_output_path = _private_staging_path(output_path, "core-output")
-    legacy = _replace_option(legacy, "--out", str(working_output_path))
+    core_arguments = _replace_option(
+        core_arguments, "--out", str(working_output_path)
+    )
     prediction_path: Path | None = None
     working_prediction_path: Path | None = None
     if requested_predictions_value:
@@ -1109,8 +1286,8 @@ def main() -> None:
         working_prediction_path = _private_staging_path(
             prediction_path, "core-predictions"
         )
-        legacy = _replace_option(
-            legacy, "--dump-predictions", str(working_prediction_path)
+        core_arguments = _replace_option(
+            core_arguments, "--dump-predictions", str(working_prediction_path)
         )
 
     install_runtime_patches(
@@ -1122,14 +1299,29 @@ def main() -> None:
         hospital_fold=hospital_fold_value,
         hospital_folds_csv=hospital_metadata_value,
         split_seed=own.split_seed,
+        head_seed=own.head_seed,
         runtime_contract=own.runtime_contract,
+        demographics_csv=demographics_value,
+        tiles_dir=tiles_value,
+        checkpoint=checkpoint_value,
+        execution_contract={
+            "sensitive": _option_value(core_arguments, "--sensitive"),
+            "method": _option_value(core_arguments, "--method") or "dann",
+            "condition_col": _option_value(core_arguments, "--condition-col"),
+            "temperature": float(
+                _option_value(core_arguments, "--proto-temp") or 0.1
+            ),
+            "lambda_adv": float(
+                _option_value(core_arguments, "--lambda-adv") or 1.0
+            ),
+        },
     )
     print(
         f"[reliable-fairness] split_seed={own.split_seed} "
         f"head_seed={own.head_seed} study_task={study_task} core_task={core_task}",
         flush=True,
     )
-    sys.argv = [sys.argv[0], *legacy]
+    sys.argv = [sys.argv[0], *core_arguments]
     implementation.main()
 
     prediction_artifact = None
@@ -1150,13 +1342,22 @@ def main() -> None:
         with prediction_path.open() as prediction_handle:
             prediction_count = sum(1 for line in prediction_handle if line.strip())
         prediction_artifact = {
-            "canonical_path": str(prediction_path),
             "sha256": sha256_file(prediction_path),
             "bytes": prediction_path.stat().st_size,
             "record_count": prediction_count,
             "required_outer_folds": list(range(5)),
             **prediction_summary,
         }
+        cohort_contract = _CACHE_CONTRACT.get("cohort_receipt")
+        if cohort_contract is not None:
+            expected_patients = int(
+                cohort_contract["coverage"]["patients_with_tiles"]
+            )
+            if prediction_count != expected_patients:
+                raise ValueError(
+                    "prediction coverage does not match COHORT_RECEIPT.json: "
+                    f"observed={prediction_count} expected={expected_patients}"
+                )
 
     result = json.loads(working_output_path.read_text())
     runner_path = Path(__file__).resolve()
@@ -1168,12 +1369,10 @@ def main() -> None:
         "split_seed": own.split_seed,
         "head_seed": own.head_seed,
         "runner": {
-            "canonical_path": str(runner_path),
             "sha256": sha256_file(runner_path),
             "bytes": runner_path.stat().st_size,
         },
-        "legacy_core": {
-            "canonical_path": str(core_path),
+        "core": {
             "sha256": sha256_file(core_path),
             "bytes": core_path.stat().st_size,
         },

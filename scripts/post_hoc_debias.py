@@ -79,7 +79,7 @@ SEX_CLASSES = ["M", "F"]                       # fe.SEX_MAP targets
 ATTR_CLASSES = {"race": RACE_CLASSES, "sex": SEX_CLASSES}
 SEED = 1337
 
-# --- Feature 2: --hf-repo auto-pull -- task -> HF cohort DIRECTORY name --------
+# --- Optional pinned Hugging Face cohort download ---------------------------
 # The fairness-tiles repo (hf_tiles.py) stores each cohort under "<cohort>/"; the
 # repo currently holds the CPTAC cohorts {cptac_lung, cptac_gbm, cptac_ccrcc}.
 # Each --task maps to its tumor-type cohort dir -- the dir name intentionally
@@ -460,12 +460,66 @@ def _needed_attrs(sensitive):
     return {"race": ["race"], "sex": ["sex"], "both": ["race", "sex"]}[sensitive]
 
 
+def select_balanced_pool_patients(candidates, sens, sensitive, condition_of,
+                                  limit, seed=1337):
+    """Select patients round-robin across condition × sensitive strata."""
+    need = _needed_attrs(sensitive)
+    strata = {}
+    for patient in sorted(set(candidates)):
+        attributes = sens.get(patient) or {}
+        if any(attributes.get(name) is None for name in need):
+            continue
+        condition = ((condition_of or {}).get(patient, "unconditioned"))
+        key = (str(condition), *(str(attributes[name]) for name in need))
+        strata.setdefault(key, []).append(patient)
+
+    def rank(patient):
+        return hashlib.sha256(f"{seed}:{patient}".encode()).hexdigest()
+
+    queues = {
+        key: sorted(patients, key=lambda patient: (rank(patient), patient))
+        for key, patients in strata.items()
+    }
+    selected = []
+    active = True
+    while active and len(selected) < max(0, int(limit)):
+        active = False
+        for key in sorted(queues):
+            if queues[key] and len(selected) < int(limit):
+                selected.append(queues[key].pop(0))
+                active = True
+
+    selected_set = set(selected)
+    selected_counts = {
+        "|".join(key): sum(patient in selected_set for patient in patients)
+        for key, patients in sorted(strata.items())
+    }
+    candidate_counts = {
+        "|".join(key): len(patients) for key, patients in sorted(strata.items())
+    }
+    receipt = {
+        "schema": "balanced-patient-pool/v1",
+        "seed": int(seed),
+        "stratification": ["condition", *need],
+        "candidate_patients": sum(candidate_counts.values()),
+        "selected_patients": len(selected),
+        "candidate_strata": candidate_counts,
+        "selected_strata": selected_counts,
+        "selected_patient_sha256": hashlib.sha256(
+            ("\n".join(sorted(selected)) + "\n").encode()
+        ).hexdigest(),
+    }
+    return selected, receipt
+
+
 def collect_tiles(tiles_dir, task_cohort, sens, sensitive, adversary_data,
-                  max_task_slides, max_pool_slides, max_tiles_per_slide, log=print):
+                  max_task_slides, max_pool_slides, max_tiles_per_slide,
+                  condition_of=None, pool_seed=1337, return_receipt=False,
+                  log=print):
     """Single pass over parquet slides. Returns (task_tiles, pool_tiles) as lists
     of (barcode, jpeg_bytes). task_tiles: slides whose patient is in the cohort.
-    pool_tiles: (matched_pool only) slides of NON-cohort patients that carry the
-    needed sensitive label(s)."""
+    pool_tiles: (matched_pool only) a deterministic patient-level sample balanced
+    round-robin across condition and sensitive-attribute strata."""
     import pyarrow.parquet as pq
 
     need = _needed_attrs(sensitive)
@@ -475,20 +529,13 @@ def collect_tiles(tiles_dir, task_cohort, sens, sensitive, adversary_data,
                                  recursive=True))
     log(f"  scanning up to {len(files)} parquet slide(s) in {tiles_dir}")
 
-    task_tiles, pool_tiles = [], []
-    task_slides = pool_slides = 0
-    task_pat, pool_pat = set(), set()
+    records = []
 
     def has_sens(bc):
         s = sens.get(bc)
         return s is not None and all(s.get(a) is not None for a in need)
 
     for f in files:
-        done_task = task_slides >= max_task_slides
-        done_pool = (adversary_data != "matched_pool"
-                     or pool_slides >= max_pool_slides)
-        if done_task and done_pool:
-            break
         pf = pq.ParquetFile(f)
         cols = pf.schema_arrow.names
         img_col = fe._detect_image_col(cols)
@@ -499,51 +546,99 @@ def collect_tiles(tiles_dir, task_cohort, sens, sensitive, adversary_data,
         if bc is None:
             continue
 
-        is_task = bc in task_cohort
-        is_pool = (not is_task) and (adversary_data == "matched_pool") and has_sens(bc)
-        if is_task and done_task:
-            continue
-        if is_pool and done_pool:
-            continue
-        if not (is_task or is_pool):
-            continue
+        records.append((f, bc, img_col))
 
-        imgs = []
-        for row_group in range(pf.num_row_groups):
-            imgs.extend(
-                pf.read_row_group(row_group, columns=[img_col])
-                .column(img_col).to_pylist()
-            )
-            if max_tiles_per_slide and len(imgs) >= max_tiles_per_slide:
-                imgs = imgs[:max_tiles_per_slide]
-                break
-        rows = [(bc, b) for b in imgs if b is not None]
-        if not rows:
-            continue
-        if is_task:
-            task_tiles.extend(rows); task_slides += 1; task_pat.add(bc)
-        else:
-            pool_tiles.extend(rows); pool_slides += 1; pool_pat.add(bc)
+    task_records = [record for record in records if record[1] in task_cohort]
+    task_records = task_records[:max(0, int(max_task_slides))]
+    pool_records = []
+    pool_receipt = None
+    if adversary_data == "matched_pool":
+        candidates = [bc for _, bc, _ in records
+                      if bc not in task_cohort and has_sens(bc)]
+        selected, pool_receipt = select_balanced_pool_patients(
+            candidates, sens, sensitive, condition_of, max_pool_slides, pool_seed
+        )
+        selected_set = set(selected)
+        by_patient = {patient: [] for patient in selected}
+        for record in records:
+            if record[1] in selected_set:
+                by_patient[record[1]].append(record)
+        # Give every selected patient one slide before adding repeat slides.
+        for patient in selected:
+            if by_patient[patient]:
+                pool_records.append(by_patient[patient][0])
+        for patient in selected:
+            for record in by_patient[patient][1:]:
+                if len(pool_records) >= int(max_pool_slides):
+                    break
+                pool_records.append(record)
+        pool_records = pool_records[:max(0, int(max_pool_slides))]
+        pool_receipt["selected_slides"] = len(pool_records)
+
+    task_tiles, pool_tiles = [], []
+    task_pat, pool_pat = set(), set()
+    for role, selected_records in (("task", task_records), ("pool", pool_records)):
+        for f, bc, img_col in selected_records:
+            pf = pq.ParquetFile(f)
+
+            imgs = []
+            for row_group in range(pf.num_row_groups):
+                imgs.extend(
+                    pf.read_row_group(row_group, columns=[img_col])
+                    .column(img_col).to_pylist()
+                )
+                if max_tiles_per_slide and len(imgs) >= max_tiles_per_slide:
+                    imgs = imgs[:max_tiles_per_slide]
+                    break
+            rows = [(bc, payload) for payload in imgs if payload is not None]
+            if role == "task":
+                task_tiles.extend(rows)
+                if rows:
+                    task_pat.add(bc)
+            else:
+                pool_tiles.extend(rows)
+                if rows:
+                    pool_pat.add(bc)
 
     log(f"  task tiles: {len(task_tiles)} from {len(task_pat)} patients "
-        f"({task_slides} slides)")
+        f"({len(task_records)} slides)")
     log(f"  pool tiles: {len(pool_tiles)} from {len(pool_pat)} patients "
-        f"({pool_slides} slides)")
-    return task_tiles, pool_tiles
+        f"({len(pool_records)} slides)")
+    if pool_receipt:
+        log(f"  balanced pool: {pool_receipt['selected_patients']} patients "
+            f"across {sum(value > 0 for value in pool_receipt['selected_strata'].values())} strata")
+    result = (task_tiles, pool_tiles, pool_receipt)
+    return result if return_receipt else result[:2]
 
 
 # ============================================================== per-tile embed (cached)
 def checkpoint_cache_identity(checkpoint):
-    """Stable, cheap identity for the exact checkpoint used to embed tiles."""
+    """Content identity for the exact checkpoint used to embed tiles."""
     if not checkpoint:
         return "checkpoint=random-init"
     resolved = Path(checkpoint).expanduser().resolve()
-    try:
-        stat = resolved.stat()
-        content_signature = f"size={stat.st_size}|mtime_ns={stat.st_mtime_ns}"
-    except OSError:
-        content_signature = "missing"
-    return f"checkpoint_path={resolved}|{content_signature}"
+    if not resolved.is_file() or resolved.is_symlink():
+        raise FileNotFoundError(
+            f"checkpoint must be an existing regular non-symlink file: {resolved}"
+        )
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"checkpoint_sha256={digest.hexdigest()}|bytes={resolved.stat().st_size}"
+
+
+def ordered_tiles_identity(tiles):
+    """Hash ordered patient IDs and tile payloads for cache invalidation."""
+    digest = hashlib.sha256(b"pathology-fairness-tiles/v1\0")
+    for barcode, payload in tiles:
+        barcode_bytes = str(barcode).encode("utf-8")
+        payload_bytes = bytes(payload)
+        digest.update(len(barcode_bytes).to_bytes(8, "big"))
+        digest.update(barcode_bytes)
+        digest.update(len(payload_bytes).to_bytes(8, "big"))
+        digest.update(payload_bytes)
+    return digest.hexdigest()
 
 
 def embed_tiles(model, mean, std, device, tiles, batch_size, log=print):
@@ -583,17 +678,25 @@ def embed_tiles(model, mean, std, device, tiles, batch_size, log=print):
 
 
 def cached_embed(tag, tiles, embed_fn, cache_dir, log=print):
-    """Cache per-tile embeddings to an .npz keyed by `tag` (config hash + set)."""
+    """Content-addressed, pickle-free cache for ordered tile embeddings."""
     if not tiles:
-        return np.zeros((0, 0), dtype=np.float32), np.asarray([], dtype=object)
-    key = hashlib.sha256((tag + f"|n={len(tiles)}").encode()).hexdigest()
+        return np.zeros((0, 0), dtype=np.float32), np.asarray([], dtype=np.str_)
+    tile_identity = ordered_tiles_identity(tiles)
+    key = hashlib.sha256(
+        f"pathology-fairness-cache/v2|{tag}|tiles={tile_identity}".encode()
+    ).hexdigest()
     path = os.path.join(cache_dir, f"emb_{tag.split('|')[0]}_{key}.npz")
-    barcodes = np.asarray([bc for bc, _ in tiles], dtype=object)
+    barcodes = np.asarray([bc for bc, _ in tiles], dtype=np.str_)
     if os.path.exists(path):
-        d = np.load(path, allow_pickle=True)
-        if d["emb"].shape[0] == len(tiles):
-            log(f"  [cache hit] {path}")
-            return d["emb"], d["barcodes"]
+        try:
+            with np.load(path, allow_pickle=False) as stored:
+                cached_barcodes = stored["barcodes"]
+                if (stored["emb"].shape[0] == len(tiles)
+                        and np.array_equal(cached_barcodes, barcodes)):
+                    log(f"  [cache hit] {path}")
+                    return stored["emb"], cached_barcodes
+        except (KeyError, OSError, ValueError):
+            log(f"  [cache invalid] rebuilding {path}")
     emb, ok = embed_fn(tiles)
     emb, barcodes = emb[ok], barcodes[ok]
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -624,7 +727,7 @@ def _attr_idx(barcodes, sens, attr):
 
 
 def _inverse_freq_weights(aidx_train, attrs, device, torch, log=print):
-    """Feature 1: per-attr class-weight tensors for the DEMOGRAPHIC loss.
+    """Build per-attribute class weights for the demographic loss.
 
     Weights come from the TRAINING-FOLD demographic label distribution (the task
     training-fold tiles, i.e. every tile the head trains on excluding the eval
@@ -664,7 +767,7 @@ def _fair_supcon(h, labels_dict, attrs, temp, torch, F, weights=None,
     When ``task_labels`` is given, positives must additionally have the same y;
     the full-minibatch similarity denominator is unchanged.
 
-    Feature 1: when ``weights`` is given ({attr: FloatTensor[C]}), each ANCHOR is
+    When ``weights`` is given ({attr: FloatTensor[C]}), each anchor is
     reweighted by the inverse-frequency weight of its own demographic class, so
     minority anchors dominate the term (weighted mean). ``weights=None`` keeps
     the original unweighted mean byte-for-byte."""
@@ -824,8 +927,8 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
     bce = nn.BCEWithLogitsLoss()
     ce = nn.CrossEntropyLoss(ignore_index=-1)
 
-    # Feature 1: inverse-frequency demographic weights (contrastive only here;
-    # pcgrad keeps unweighted CE). None -> byte-identical original behavior.
+    # Optional inverse-frequency demographic weights (contrastive only here;
+    # PCGrad keeps unweighted cross-entropy).
     cw = None
     if race_weight == "inverse_freq" and method == "contrastive":
         cw = _inverse_freq_weights(aidx_tr_np, attrs, device, torch, log)
@@ -932,7 +1035,7 @@ def _train_eval_projfree(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of
     y_pat = np.array([label_of[b] for b in patient_ids], dtype=np.int64)
     overall_auc = fe._safe_auc(y_pat, p_hat)
 
-    groups, joined, age_med = fe.build_group_arrays(patient_ids, None, _DEMO_ROW)
+    groups, joined, age_cutoff = fe.build_group_arrays(patient_ids, None, _DEMO_ROW)
     attributes = {a: fe.subgroup_report(y_pat, p_hat, groups[a], MIN_N)
                   for a in ("race", "sex", "age")}
 
@@ -969,10 +1072,9 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
                    batch_size, device, method="dann", proto_temp=0.1,
                    proto_ema=0.9, race_weight="none", dump_records=False,
                    condition_on_label=False, condition_of=None,
-                   n_conditions=2, log=print):
+    n_conditions=2, log=print):
     torch = _torch()
     import torch.nn as nn
-    from sklearn.metrics import roc_auc_score
 
     if method in ("contrastive", "pcgrad"):        # trunk-level methods (no GRL)
         return _train_eval_projfree(
@@ -1028,7 +1130,7 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
     bce = nn.BCEWithLogitsLoss()
     ce = nn.CrossEntropyLoss(ignore_index=-1)
 
-    # Feature 1: inverse-frequency demographic weighting for the adversary CE
+    # Optional inverse-frequency demographic weighting for the adversary CE
     # (dann + fino). Weights from the task training-fold label distribution.
     # None -> identical to original (falls through to the unweighted `ce`).
     ce_by_attr = None
@@ -1059,13 +1161,17 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
                 torch.tensor(condition_task[is_train_task], device=device)[idx]
                 if condition_on_label else None)
             logit, adv_logits = model(
-                Xtr_task[idx], lambd, labels=lab, task_labels=task_labels)
+                Xtr_task[idx], lambd,
+                labels=lab if lambd != 0 else None,
+                task_labels=task_labels,
+            )
             loss = bce(logit, ytr_task[idx])
-            for a in attrs:
-                loss = loss + ce_a(a, adv_logits[a], aidx_tr_task_t[a][idx])
+            if lambd != 0:
+                for a in attrs:
+                    loss = loss + ce_a(a, adv_logits[a], aidx_tr_task_t[a][idx])
             opt.zero_grad(); loss.backward(); opt.step()
         # -- extra adversary supervision from the pool (adv loss only; GRL-reversed)
-        if adv_tiles > n_task:
+        if lambd != 0 and adv_tiles > n_task:
             perm2 = torch.randperm(adv_tiles, device=device)
             for s in range(0, adv_tiles, batch_size):
                 idx = perm2[s:s + batch_size]
@@ -1103,32 +1209,34 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
     overall_auc = fe._safe_auc(y_pat, p_hat)
 
     # fairness metrics reuse fairness_eval schema (group arrays via demo lookup)
-    groups, joined, age_med = fe.build_group_arrays(patient_ids, None, _DEMO_ROW)
+    groups, joined, age_cutoff = fe.build_group_arrays(patient_ids, None, _DEMO_ROW)
     attributes = {a: fe.subgroup_report(y_pat, p_hat, groups[a], MIN_N)
                   for a in ("race", "sex", "age")}
 
     # adversary diagnostic AUC (tile-level, on eval tiles)
-    adv_auc = {}
-    for a in attrs:
-        yi = _attr_idx(bc_ev, sens, a)
-        m = yi >= 0
-        prob = adv_prob[a][m]
-        yy = yi[m]
-        if len(set(yy)) < 2:
-            adv_auc[a] = None; continue
-        try:
-            if prob.shape[1] == 2:
-                adv_auc[a] = float(roc_auc_score(yy, prob[:, 1]))
-            else:
-                # macro one-vs-rest over classes actually present in this fold
-                aucs = []
-                for c in range(prob.shape[1]):
-                    yc = (yy == c).astype(int)
-                    if 0 < yc.sum() < len(yc):
-                        aucs.append(roc_auc_score(yc, prob[:, c]))
-                adv_auc[a] = float(np.mean(aucs)) if aucs else None
-        except Exception:
-            adv_auc[a] = None
+    adv_auc = {attribute: None for attribute in attrs}
+    if lambd != 0:
+        from sklearn.metrics import roc_auc_score
+        for a in attrs:
+            yi = _attr_idx(bc_ev, sens, a)
+            m = yi >= 0
+            prob = adv_prob[a][m]
+            yy = yi[m]
+            if len(set(yy)) < 2:
+                continue
+            try:
+                if prob.shape[1] == 2:
+                    adv_auc[a] = float(roc_auc_score(yy, prob[:, 1]))
+                else:
+                    # macro one-vs-rest over classes actually present in this fold
+                    aucs = []
+                    for c in range(prob.shape[1]):
+                        yc = (yy == c).astype(int)
+                        if 0 < yc.sum() < len(yc):
+                            aucs.append(roc_auc_score(yc, prob[:, c]))
+                    adv_auc[a] = float(np.mean(aucs)) if aucs else None
+            except Exception:
+                adv_auc[a] = None
 
     res = {
         "lambda": lambd,
@@ -1136,7 +1244,7 @@ def train_and_eval(emb_task, bc_task, emb_pool, bc_pool, label_of, fold_of,
         "n_eval_patients": len(patient_ids),
         "n_eval_tiles": int(is_eval.sum()),
         "n_train_task_tiles": int(n_task),
-        "n_adversary_tiles": int(adv_tiles),
+        "n_adversary_tiles": int(adv_tiles if lambd != 0 else 0),
         "attributes": attributes,
         "adversary_demo_auc": adv_auc,
     }
@@ -1179,8 +1287,12 @@ def _predictions_list(patient_ids, y_pat, p_hat, groups):
 # ============================================================== main
 def main():
     ap = argparse.ArgumentParser(description="Post-hoc DANN debiasing head (frozen encoder)")
-    ap.add_argument("--checkpoint", default=None,
-                    help="DinoV2ViT .pt (omit/missing -> random backbone, proves plumbing)")
+    checkpoint_group = ap.add_mutually_exclusive_group(required=True)
+    checkpoint_group.add_argument("--checkpoint", help="trained DinoV2ViT checkpoint .pt")
+    checkpoint_group.add_argument(
+        "--allow-random-init", action="store_true",
+        help="use random weights for a non-scientific plumbing smoke test",
+    )
     ap.add_argument("--task", required=True,
                     choices=["brca_tp53", "brca", "lihc_grade", "ucec_tp53", "coad_tp53",
                              "luad_tp53",
@@ -1202,12 +1314,12 @@ def main():
                     help="fino: EMA decay for prototype-bank updates")
     ap.add_argument("--lambda-adv", type=float, default=1.0)
     ap.add_argument("--race-weight", choices=["none", "inverse_freq"], default="none",
-                    help="Feature 1: 'inverse_freq' weights the DEMOGRAPHIC loss "
+                    help="'inverse_freq' weights the demographic loss "
                          "by inverse class frequency (minority race/sex upweighted), "
                          "computed from the training-fold label distribution and "
                          "normalized to mean 1. Applies to dann/fino (adversary CE "
                          "weight) and contrastive (per-anchor weight). 'none' "
-                         "(default) is byte-identical to the original behavior.")
+                         "'none' leaves it unweighted.")
     ap.add_argument("--fold-col", default=None)
     ap.add_argument("--label-col", default=None,
                     help="external local cohort (dcis_duke / cptac_gbm): read the "
@@ -1225,24 +1337,31 @@ def main():
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--embed-batch-size", type=int, default=128)
     ap.add_argument("--max-task-slides", type=int, default=10**9)
-    ap.add_argument("--max-pool-slides", type=int, default=400)
+    ap.add_argument(
+        "--max-pool-slides", type=int, default=400,
+        help="maximum auxiliary-pool slides after patient-level balancing",
+    )
+    ap.add_argument("--pool-seed", type=int, default=1337,
+                    help="seed for deterministic balanced-pool patient ranking")
     ap.add_argument("--max-tiles-per-slide", type=int, default=0, help="0 = all")
     ap.add_argument("--tiles-dir", required=True)
     ap.add_argument("--labels-tsv", default=None,
                     help="CPTAC labels TSV (case_id/subtype) -- required when "
                          "--task cptac_nsclc; ignored for TCGA tasks.")
     ap.add_argument("--hf-repo", default=None,
-                    help="Feature 2: HF dataset repo id (e.g. "
+                    help="Hugging Face dataset repo id (e.g. "
                          "org/fairness-tiles). When set AND the "
                          "local --tiles-dir is absent/empty, the task's cohort is "
                          "pulled from HF (via hf_tiles.pull) before embedding; "
                          "otherwise the existing local tiles are used and the pull "
                          "is SKIPPED.")
+    ap.add_argument("--hf-revision", default=None,
+                    help="immutable dataset commit SHA; required with --hf-repo")
     ap.add_argument("--hf-scratch", default=None,
-                    help="Feature 2: dir to pull HF tiles into "
+                    help="directory to pull Hugging Face tiles into "
                          "(default <cache-dir>/hf_tiles).")
     ap.add_argument("--hf-clean", action="store_true",
-                    help="Feature 2: delete the pulled HF tiles after the run.")
+                    help="delete pulled Hugging Face tiles after the run.")
     ap.add_argument("--demographics-csv", required=True)
     ap.add_argument("--molecular-csv", default=None)
     ap.add_argument("--cache-dir", default=".cache/pathology-fairness")
@@ -1250,12 +1369,13 @@ def main():
     ap.add_argument("--model-dir", default=fe.WORKTREE,
                     help="directory containing model.py (default: bundled pretraining code)")
     ap.add_argument("--device", default=None)
+    ap.add_argument("--age-cutoff", type=float, default=fe.DEFAULT_AGE_CUTOFF,
+                    help="fixed age threshold used for every fold (default: 65)")
     ap.add_argument("--dump-predictions", default=None,
                     help="if set, write a per-patient held-out eval-fold JSONL "
                          "(patient_id, y_true, y_score, race, sex, age) for the "
                          "DEBIASED run (falls back to baseline when lambda=0) to "
-                         "this path. Default None = unchanged; --out JSON stays "
-                         "byte-identical.")
+                         "this path.")
     ap.add_argument("--hospital-folds-csv", default=None,
                     help="Hospital-fold CSV (patient_barcode + fold column). When "
                          "--hospital-fold is set, restrict the cohort to patients "
@@ -1300,6 +1420,7 @@ def main():
 
     # metadata ------------------------------------------------------------
     global _DEMO_MAP
+    fe.DEFAULT_AGE_CUTOFF = float(args.age_cutoff)
     is_cptac = args.task == "cptac_nsclc"
     # External LOCAL cohorts (Duke DCIS, CPTAC-GBM): leak-free, case_id-keyed
     # parquet tiles + generic --molecular-csv/--label-col labels. They take the
@@ -1432,34 +1553,46 @@ def main():
     # backbone (probe.py path) -------------------------------------------
     log("[debias] building backbone")
     model, mean, std, binfo = fe.build_backbone(
-        args.checkpoint, device, args.variant, args.model_dir
+        args.checkpoint, device, args.variant, args.model_dir,
+        allow_random_init=args.allow_random_init,
     )
     log(f"  backbone: {binfo['variant']} weights={binfo['weights']} "
         f"random_init={binfo['random_init']} dim={binfo['embed_dim']}")
 
-    # Feature 2: --hf-repo auto-pull of the task's tile cohort -------------
+    # Optional pinned Hugging Face pull of the task's tile cohort.
     tiles_dir = args.tiles_dir
     pulled_dir = None
     if args.hf_repo:
+        if not args.hf_revision:
+            ap.error("--hf-revision is required with --hf-repo")
         cohort_dir = TASK_COHORT.get(args.task)
         if cohort_dir is None:
             ap.error(f"--hf-repo set but no cohort mapping for task '{args.task}'")
         if _dir_absent_or_empty(tiles_dir):
             import hf_tiles                       # reuse the existing pull logic
-            hf_tiles.REPO = args.hf_repo          # honor the requested repo id
             scratch = args.hf_scratch or os.path.join(args.cache_dir, "hf_tiles")
             dest = os.path.join(scratch, cohort_dir)
             log(f"[debias] local tiles-dir '{tiles_dir}' absent/empty -> pulling "
-                f"cohort '{cohort_dir}' from HF repo {args.hf_repo} into {dest}")
-            hf_tiles.pull(cohort_dir, dest)       # snapshot_download nests under dest/
+                f"cohort '{cohort_dir}' from HF repo {args.hf_repo} "
+                f"at {args.hf_revision} into {dest}")
+            hf_tiles.pull(
+                cohort_dir, dest, repo=args.hf_repo, revision=args.hf_revision
+            )
             tiles_dir = dest                      # recursive parquet glob finds them
             pulled_dir = dest
         else:
             log(f"[debias] --hf-repo set but local tiles-dir '{tiles_dir}' exists "
                 f"and holds tiles -> SKIP HF pull (cohort would be '{cohort_dir}')")
 
+    dataset_identity = None
+    if not is_cptac and not is_external_local and not args.hf_repo:
+        from pathology_fairness.data_contracts import validate_dataset_receipt
+
+        dataset_identity = validate_dataset_receipt(tiles_dir, "downstream")
+
     # collect + embed tiles (cached) -------------------------------------
     log("[debias] collecting tiles")
+    pool_selection = None
     if is_cptac or is_external_local:
         # CPTAC / external-local (Duke, GBM) parquet is case_id-keyed (not TCGA
         # slide_path); reuse fairness_eval's case_id-aware indexer. Every cohort
@@ -1471,9 +1604,11 @@ def main():
         task_tiles = [(pids[pidx], jpg) for pidx, jpg in idx_tiles]
         pool_tiles = []
     else:
-        task_tiles, pool_tiles = collect_tiles(
+        task_tiles, pool_tiles, pool_selection = collect_tiles(
             tiles_dir, tile_cohort, sens, args.sensitive, args.adversary_data,
-            args.max_task_slides, args.max_pool_slides, args.max_tiles_per_slide, log)
+            args.max_task_slides, args.max_pool_slides,
+            args.max_tiles_per_slide, condition_of=condition_of,
+            pool_seed=args.pool_seed, return_receipt=True, log=log)
     if not task_tiles:
         ap.error("no task tiles collected -- check tiles-dir / cohort")
 
@@ -1526,12 +1661,14 @@ def main():
         "condition_categories": condition_categories,
         "hospital_fold": args.hospital_fold,
         "inner_splits": args.inner_splits,
-        "hf_repo": args.hf_repo, "tiles_dir": tiles_dir,
+        "hf_repo": args.hf_repo, "hf_revision": args.hf_revision,
         "eval_fold": args.eval_fold, "lambda_adv": args.lambda_adv,
-        "checkpoint": args.checkpoint, "backbone": binfo,
+        "checkpoint_identity": checkpoint_identity, "backbone": binfo,
+        "dataset_identity": dataset_identity,
         "n_cohort_patients": len(cohort),
         "n_task_tiles": int(emb_task.shape[0]),
         "n_pool_tiles": int(emb_pool.shape[0]),
+        "pool_selection": pool_selection,
         "min_n": MIN_N, "epochs": args.epochs, "hidden": args.hidden,
         "runs": runs,
         "elapsed_sec": round(time.monotonic() - t0, 1),
@@ -1546,7 +1683,7 @@ def main():
     # which is what the --out JSON reports. For the dump we want EVERY cohort
     # patient exactly once, so we re-evaluate the DEBIASED head out-of-fold on
     # each held-out fold and concatenate (mirrors fairness_eval's internal-CV
-    # dump). --out above stays byte-identical.
+    # dump). The summary JSON above remains independent of the optional dump.
     if args.dump_predictions:
         dump_lambda = args.lambda_adv if abs(args.lambda_adv) > 1e-12 else 0.0
         all_folds = sorted(set(fold_of.values()))
@@ -1571,7 +1708,7 @@ def main():
         print(f"[debias] dumped {len(records)} OOF per-patient predictions "
               f"({len(all_folds)} folds) -> {dpath}")
 
-    # Feature 2: optionally free the pulled HF tiles ----------------------
+    # Optionally remove the pulled Hugging Face tiles.
     if args.hf_clean and pulled_dir and os.path.isdir(pulled_dir):
         import shutil
         shutil.rmtree(pulled_dir, ignore_errors=True)
@@ -1607,11 +1744,13 @@ def to_markdown(res):
         L.append(f"## {tag} (lambda={r['lambda']})  overall task AUROC={_f(r['overall_auc'])}")
         for attr, a in r["attributes"].items():
             L.append(f"### {attr}: AUCd={_f(a['auc_delta'])} ES-AUC={_f(a['es_auc'])} "
-                     f"ECEd={_f(a['ece_delta'])} (powered={a['n_powered_subgroups']})")
+                     f"ECEd={_f(a['ece_delta'])} "
+                     f"(eligible={a['n_eligible_subgroups']})")
             L.append("| subgroup | n | pos | neg | AUROC | flag |")
             L.append("|---|---|---|---|---|---|")
             for g, s in a["subgroups"].items():
-                flag = "LOW-POWER" if s["low_power"] else ""
+                flag = ("INSUFFICIENT-SUPPORT"
+                        if s["insufficient_support"] else "")
                 L.append(f"| {g} | {s['n']} | {s['n_pos']} | {s['n_neg']} | "
                          f"{_f(s['auc'])} | {flag} |")
         L.append("")

@@ -15,7 +15,7 @@ in-distribution TCGA tasks (nsclc / glioma / brca) and the external CPTAC task
 (cptac_nsclc), in either internal-CV or external-test mode.
 
 --------------------------------------------------------------------------------
-Reused verbatim from probe.py (worktree 20260710_fino-fairness), do not diverge:
+The backbone and pooling path mirrors the bundled pretraining probe:
   * Backbone build + load  (probe.py:975-982, run_probe_job):
         model = DinoV2ViT(variant=cfg["model"]["type"]).eval()
         state_key = {"ema": "model_ema", "model": "model"}[cfg["probe"]["model_weights"]]
@@ -38,16 +38,17 @@ Reused verbatim from probe.py (worktree 20260710_fino-fairness), do not diverge:
 
 --------------------------------------------------------------------------------
 Fairness metric definitions
-  * AUC-delta (AUCd)     = max_g AUC_g - min_g AUC_g over adequately-powered subgroups.
+  * AUC-delta (AUCd)     = max_g AUC_g - min_g AUC_g over eligible subgroups.
   * Equity-Scaled AUC    (FairPath / Harvard-Ophthalmology, Luo et al. 2023,
     "Harvard Glaucoma Fairness"; Tian et al. FairCLIP / FairVision):
         ES-AUC = AUC_overall / (1 + sum_g |AUC_overall - AUC_g|)
     summed over the sensitive subgroups g of one attribute. Perfectly equal
     subgroups -> ES-AUC == AUC_overall; disparity shrinks it.
   * ECE (10-bin, equal-width): ECE = sum_b (n_b/N) * |acc_b - conf_b|.
-    ECE-delta (ECEd) = max_g ECE_g - min_g ECE_g over adequately-powered subgroups.
+    ECE-delta (ECEd) = max_g ECE_g - min_g ECE_g over eligible subgroups.
   * Subgroups with too few total patients OR too few patients in either outcome
-    class are REPORTED but flagged low_power and excluded from gap metrics.
+    class are reported as having insufficient support and excluded from gap
+    metrics. These thresholds are heuristics, not a formal power analysis.
 """
 import argparse
 import glob
@@ -63,6 +64,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pathology_fairness.data_contracts import sha256_file, validate_dataset_receipt
+
 # ------------------------------------------------------------------ constants
 LR_CS = (0.001, 0.01, 0.1, 0.5, 1.0, 10.0, 100.0)  # probe.py SURGEN_LR_CS
 LR_MAX_ITER = 5000
@@ -71,6 +74,7 @@ FOLD_SEED = 1337
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 DEFAULT_VARIANT = "dinov2_vits14_reg"
+DEFAULT_AGE_CUTOFF = 65.0
 IMAGE_COL_CANDIDATES = ("jpeg", "image", "image_bytes")
 RACE_MAP = {"white": "White", "black": "Black",
             "black or african american": "Black", "asian": "Asian"}
@@ -89,24 +93,39 @@ TASK_TO_COHORT = {
 
 
 # ============================================================== backbone (probe.py path)
-def build_backbone(checkpoint_path, device, variant_override=None, model_dir=WORKTREE):
+def build_backbone(checkpoint_path, device, variant_override=None,
+                   model_dir=WORKTREE, allow_random_init=False):
     """Replicates probe.py run_probe_job backbone load. Returns
-    (model, mean(1,3,1,1), std(1,3,1,1), info). If checkpoint_path is None or
-    missing, builds a RANDOM-init DinoV2ViT (proves plumbing, ~0.5 AUC)."""
+    (model, mean(1,3,1,1), std(1,3,1,1), info).
+
+    Random initialization is available only through an explicit smoke-test
+    opt-in. A missing requested checkpoint always fails before model creation.
+    """
+    if checkpoint_path is None:
+        if not allow_random_init:
+            raise ValueError(
+                "a checkpoint is required; pass --allow-random-init only for "
+                "a non-scientific plumbing smoke test"
+            )
+    else:
+        checkpoint_path = str(Path(checkpoint_path).expanduser())
+        if not Path(checkpoint_path).is_file():
+            raise FileNotFoundError(f"checkpoint does not exist: {checkpoint_path}")
+
     import torch
 
     if model_dir not in sys.path:
         sys.path.insert(0, model_dir)
     from model import DinoV2ViT  # noqa: E402  (probe.py:951)
 
-    random_init = checkpoint_path is None or not os.path.exists(checkpoint_path)
+    random_init = checkpoint_path is None
     variant = variant_override or DEFAULT_VARIANT
     mean_v, std_v, weights = IMAGENET_MEAN, IMAGENET_STD, "random"
 
     if random_init:
         model = DinoV2ViT(variant=variant).to(device).eval()
     else:
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         cfg = ckpt.get("config", {})
         variant = variant_override or cfg.get("model", {}).get("type", DEFAULT_VARIANT)
         data_cfg = cfg.get("data", {})
@@ -390,8 +409,8 @@ def subgroup_report(y, p, group_of, min_n, min_class_n=5):
             groups[g].append(i)
 
     subgroups = {}
-    powered = {}  # name -> auc for adequately-powered subgroups
-    powered_ece = {}
+    eligible = {}  # name -> auc for subgroups meeting the support heuristic
+    eligible_ece = {}
     for g, idx in sorted(groups.items()):
         idx = np.asarray(idx)
         yy, pp = y[idx], p[idx]
@@ -400,14 +419,16 @@ def subgroup_report(y, p, group_of, min_n, min_class_n=5):
         ece = ece_score(yy, pp) if n > 0 else None
         n_pos = int(yy.sum())
         n_neg = int((1 - yy).sum())
-        low_power = n < min_n or min(n_pos, n_neg) < min_class_n
+        insufficient_support = n < min_n or min(n_pos, n_neg) < min_class_n
         subgroups[g] = {
             "n": n, "n_pos": n_pos, "n_neg": n_neg,
-            "auc": auc, "ece": ece, "low_power": low_power,
+            "auc": auc, "ece": ece,
+            "insufficient_support": insufficient_support,
+            "eligible_for_gap": not insufficient_support and auc is not None,
         }
-        if not low_power and auc is not None:
-            powered[g] = auc
-            powered_ece[g] = ece
+        if not insufficient_support and auc is not None:
+            eligible[g] = auc
+            eligible_ece[g] = ece
 
     overall_auc = _safe_auc(y[[g is not None for g in group_of]] if False else y, p)
     # overall over patients that belong to *some* group of this attribute
@@ -415,12 +436,12 @@ def subgroup_report(y, p, group_of, min_n, min_class_n=5):
     attr_overall = _safe_auc(y[in_attr], p[in_attr]) if in_attr.sum() else None
 
     auc_delta = es_auc = ece_delta = None
-    if len(powered) >= 2 and attr_overall is not None:
-        vals = list(powered.values())
+    if len(eligible) >= 2 and attr_overall is not None:
+        vals = list(eligible.values())
         auc_delta = float(max(vals) - min(vals))
         denom = 1.0 + sum(abs(attr_overall - a) for a in vals)
         es_auc = float(attr_overall / denom)
-        ev = list(powered_ece.values())
+        ev = list(eligible_ece.values())
         ece_delta = float(max(ev) - min(ev))
     return {
         "attr_overall_auc": attr_overall,
@@ -428,12 +449,12 @@ def subgroup_report(y, p, group_of, min_n, min_class_n=5):
         "auc_delta": auc_delta,
         "es_auc": es_auc,
         "ece_delta": ece_delta,
-        "n_powered_subgroups": len(powered),
+        "n_eligible_subgroups": len(eligible),
         "min_n": min_n, "min_class_n": min_class_n,
     }
 
 
-def build_group_arrays(patient_ids, demo, key_lookup):
+def build_group_arrays(patient_ids, demo, key_lookup, age_cutoff=None):
     """Return dict attr -> list of subgroup labels (or None) aligned to patient_ids,
     plus join mask. key_lookup(pid) -> demographics row or None."""
     race, sex, age_vals = [], [], []
@@ -450,15 +471,14 @@ def build_group_arrays(patient_ids, demo, key_lookup):
         except (ValueError, TypeError):
             age_vals.append(np.nan)
     age_vals = np.asarray(age_vals)
-    finite = age_vals[np.isfinite(age_vals)]
-    med = float(np.median(finite)) if finite.size else None
+    cutoff = DEFAULT_AGE_CUTOFF if age_cutoff is None else float(age_cutoff)
     age = []
     for v in age_vals:
-        if med is None or not np.isfinite(v):
+        if not np.isfinite(v):
             age.append(None)
         else:
-            age.append(f"age<{med:.0f}" if v < med else f"age>={med:.0f}")
-    return {"race": race, "sex": sex, "age": age}, np.asarray(joined), med
+            age.append(f"age<{cutoff:g}" if v < cutoff else f"age>={cutoff:g}")
+    return {"race": race, "sex": sex, "age": age}, np.asarray(joined), cutoff
 
 
 # ============================================================== markdown
@@ -477,12 +497,12 @@ def to_markdown(res):
         L.append(f"### {attr}")
         L.append(f"attr AUROC={_f(a['attr_overall_auc'])}  AUCd={_f(a['auc_delta'])}  "
                  f"ES-AUC={_f(a['es_auc'])}  ECEd={_f(a['ece_delta'])}  "
-                 f"(powered subgroups: {a['n_powered_subgroups']}, "
+                 f"(eligible subgroups: {a['n_eligible_subgroups']}, "
                  f"min_n={a['min_n']}, min_class_n={a['min_class_n']})")
         L.append("| subgroup | n | pos | neg | AUROC | ECE | flag |")
         L.append("|---|---|---|---|---|---|---|")
         for g, s in a["subgroups"].items():
-            flag = "LOW-POWER" if s["low_power"] else ""
+            flag = "INSUFFICIENT-SUPPORT" if s["insufficient_support"] else ""
             L.append(f"| {g} | {s['n']} | {s['n_pos']} | {s['n_neg']} | "
                      f"{_f(s['auc'])} | {_f(s['ece'])} | {flag} |")
         L.append("")
@@ -500,17 +520,21 @@ def _dir_has_parquet(d):
         glob.glob(os.path.join(d, "**", "*.parquet"), recursive=True))
 
 
-def maybe_pull_hf_tiles(task, tiles_dir, hf_repo, out_path, log=print):
+def maybe_pull_hf_tiles(task, tiles_dir, hf_repo, hf_revision, out_path, log=print):
     """Auto-pull a tile cohort from HuggingFace when needed.
 
     Returns (effective_tiles_dir, scratch_to_clean). When --hf-repo is unset OR
     the local `tiles_dir` already holds parquet tiles, the ORIGINAL tiles_dir is
-    returned unchanged and scratch_to_clean is None -- the default code path is
-    byte-identical. Otherwise the cohort for `task` (TASK_TO_COHORT) is pulled
+    returned unchanged and scratch_to_clean is None. Otherwise the cohort for
+    `task` (TASK_TO_COHORT) is pulled
     via hf_tiles.pull into a scratch dir beside --out, and that dir is returned.
     """
     if not hf_repo or _dir_has_parquet(tiles_dir):
         return tiles_dir, None            # default path: pull SKIPPED
+    if not hf_revision:
+        raise SystemExit(
+            "[fairness_eval] --hf-revision is required with --hf-repo"
+        )
     cohort = TASK_TO_COHORT.get(task)
     if cohort is None:
         raise SystemExit(
@@ -518,19 +542,23 @@ def maybe_pull_hf_tiles(task, tiles_dir, hf_repo, out_path, log=print):
             "(in-distribution tasks require a populated local --tiles-dir); "
             f"provide a populated --tiles-dir instead")
     import hf_tiles                        # same tools/ dir; reuse pull() verbatim
-    hf_tiles.REPO = hf_repo               # honour --hf-repo (pull() reads module REPO)
     dest = os.path.join(str(Path(out_path).parent), "_hf_tiles", cohort)
     os.makedirs(dest, exist_ok=True)
     log(f"[fairness_eval] local tiles-dir '{tiles_dir}' missing/empty; pulling "
-        f"cohort '{cohort}' from HF repo '{hf_repo}' -> {dest}")
-    hf_tiles.pull(cohort, dest)           # snapshot_download(allow_patterns=[f"{cohort}/*"])
+        f"cohort '{cohort}' from HF repo '{hf_repo}' at {hf_revision} -> {dest}")
+    hf_tiles.pull(cohort, dest, repo=hf_repo, revision=hf_revision)
     return dest, dest
 
 
 # ============================================================== main
 def main():
     ap = argparse.ArgumentParser(description="Fairness eval harness for pathology FM checkpoints")
-    ap.add_argument("--checkpoint", default=None, help="checkpoint .pt (omit / missing => random backbone)")
+    checkpoint_group = ap.add_mutually_exclusive_group(required=True)
+    checkpoint_group.add_argument("--checkpoint", help="trained checkpoint .pt")
+    checkpoint_group.add_argument(
+        "--allow-random-init", action="store_true",
+        help="use random weights for a non-scientific plumbing smoke test",
+    )
     ap.add_argument("--task", required=True, choices=["nsclc", "glioma", "brca", "cptac_nsclc", "dcis_duke", "cptac_gbm"])
     ap.add_argument("--tiles-dir", required=True, help="dir of tile parquet files (eval/test set)")
     ap.add_argument("--demographics-csv", required=True)
@@ -558,6 +586,8 @@ def main():
     ap.add_argument("--min-n", type=int, default=15)
     ap.add_argument("--min-class-n", type=int, default=5,
                     help="minimum positives and negatives required per subgroup")
+    ap.add_argument("--age-cutoff", type=float, default=DEFAULT_AGE_CUTOFF,
+                    help="fixed age threshold used for every fold (default: 65)")
     ap.add_argument("--n-splits", type=int, default=5)
     ap.add_argument("--max-slides", type=int, default=0, help="cap slides (0=all; for CPU smoke)")
     ap.add_argument("--max-tiles-per-slide", type=int, default=0, help="cap tiles/slide (0=all)")
@@ -570,14 +600,15 @@ def main():
                     help="Hugging Face dataset repo id (for example, org/fairness-tiles); "
                          "when set AND --tiles-dir is missing/empty, auto-pull the cohort "
                          "for --task (see TASK_TO_COHORT) before eval")
+    ap.add_argument("--hf-revision", default=None,
+                    help="immutable dataset commit SHA; required with --hf-repo")
     ap.add_argument("--hf-clean", action="store_true",
                     help="remove the HF-pulled scratch tiles after eval")
     ap.add_argument("--dump-predictions", default=None,
                     help="if set, write a per-patient JSONL (one line each: "
                          "patient_id, y_true, y_score, race, sex, age) to this "
                          "path -- the same per-patient pooled scores/labels/demo "
-                         "that feed subgroup_report. Default None leaves all "
-                         "behavior (and the --out JSON) byte-identical.")
+                         "that feed subgroup_report.")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -638,7 +669,8 @@ def main():
     # --- backbone (probe.py path) ------------------------------------------
     log("[fairness_eval] building backbone")
     model, mean, std, binfo = build_backbone(
-        args.checkpoint, device, args.variant, args.model_dir
+        args.checkpoint, device, args.variant, args.model_dir,
+        allow_random_init=args.allow_random_init,
     )
     log(f"  backbone: {binfo['variant']} weights={binfo['weights']} "
         f"random_init={binfo['random_init']} dim={binfo['embed_dim']}")
@@ -646,8 +678,12 @@ def main():
     # --- index + embed EVAL tiles ------------------------------------------
     # Optional HF auto-pull: no-op (returns args.tiles_dir unchanged) unless
     # --hf-repo is set and the local tiles-dir is missing/empty.
-    tiles_dir, hf_scratch = maybe_pull_hf_tiles(args.task, args.tiles_dir,
-                                                args.hf_repo, args.out, log)
+    tiles_dir, hf_scratch = maybe_pull_hf_tiles(
+        args.task, args.tiles_dir, args.hf_repo, args.hf_revision, args.out, log
+    )
+    dataset_identity = None
+    if args.task in {"brca", "nsclc", "glioma"}:
+        dataset_identity = validate_dataset_receipt(tiles_dir, "downstream")
     log("[fairness_eval] indexing eval tiles")
     patient_ids, tiles = build_tile_index(tiles_dir, allowed, args.max_slides,
                                           args.max_tiles_per_slide, log)
@@ -663,10 +699,14 @@ def main():
         f"(pos={int(y.sum())}, neg={int((1 - y).sum())})")
 
     # --- probing ------------------------------------------------------------
+    train_dataset_identity = None
     if args.external_test:
         if not (args.train_tiles_dir and args.train_demographics_csv):
             ap.error("--external-test requires --train-tiles-dir and --train-demographics-csv")
         log("[fairness_eval] external-test: indexing + embedding TCGA train tiles")
+        train_dataset_identity = validate_dataset_receipt(
+            args.train_tiles_dir, "downstream"
+        )
         tdemo = load_demographics(args.train_demographics_csv, "patient_barcode")
         tlf = tcga_labels_folds(tdemo, "nsclc")
         tr_ids, tr_tiles = build_tile_index(args.train_tiles_dir, set(tlf),
@@ -713,10 +753,12 @@ def main():
 
     # --- demographics join + subgroup metrics ------------------------------
     key_lookup = (lambda pid: demo.get(pid))  # eval demographics is the target cohort
-    groups, joined, age_med = build_group_arrays(patient_ids, demo, key_lookup)
+    groups, joined, age_cutoff = build_group_arrays(
+        patient_ids, demo, key_lookup, age_cutoff=args.age_cutoff
+    )
     join_rate = float(joined.mean()) if len(joined) else 0.0
     log(f"[fairness_eval] demographics join_rate={join_rate:.3f} "
-        f"({int(joined.sum())}/{len(joined)}), age median-split={age_med}")
+        f"({int(joined.sum())}/{len(joined)}), age cutoff={age_cutoff}")
     assert join_rate > 0.0, "demographics join failed for ALL patients -- check key column"
 
     attributes = {attr: subgroup_report(
@@ -749,18 +791,31 @@ def main():
         log(f"[fairness_eval] dumped {len(patient_ids)} per-patient predictions "
             f"-> {dpath}")
 
-    low_power_flags = [f"{attr}:{g}" for attr in attributes
-                       for g, s in attributes[attr]["subgroups"].items() if s["low_power"]]
+    insufficient_support_flags = [
+        f"{attr}:{group}" for attr in attributes
+        for group, summary in attributes[attr]["subgroups"].items()
+        if summary["insufficient_support"]
+    ]
 
     res = {
         "task": args.task, "mode": mode, "external_test": args.external_test,
-        "checkpoint": args.checkpoint, "backbone": binfo,
+        "checkpoint": (
+            {"kind": "random-init", "sha256": None, "bytes": 0}
+            if args.checkpoint is None else {
+                "kind": "checkpoint",
+                "sha256": sha256_file(Path(args.checkpoint)),
+                "bytes": Path(args.checkpoint).stat().st_size,
+            }
+        ),
+        "backbone": binfo,
+        "dataset_identity": dataset_identity,
+        "train_dataset_identity": train_dataset_identity,
         "n_patients": len(patient_ids), "n_pos": int(y.sum()), "n_neg": int((1 - y).sum()),
         "tiles_embedded": int(counts.sum()), "join_rate": join_rate,
-        "age_median": age_med, "best_C": best_C, "min_n": args.min_n,
+        "age_cutoff": age_cutoff, "best_C": best_C, "min_n": args.min_n,
         "min_class_n": args.min_class_n,
         "overall_auc": overall_auc, "attributes": attributes,
-        "low_power_flags": low_power_flags,
+        "insufficient_support_flags": insufficient_support_flags,
         "elapsed_sec": round(time.monotonic() - t0, 1),
         "patients": patient_ids,
     }
@@ -772,10 +827,10 @@ def main():
         import shutil
         shutil.rmtree(hf_scratch, ignore_errors=True)
         print(f"[fairness_eval] cleaned HF scratch {hf_scratch}")
-    if low_power_flags:
-        print(f"[fairness_eval] LOW-POWER subgroups (n<{args.min_n} or either "
-              f"class n<{args.min_class_n}; excluded from gaps): "
-              f"{', '.join(low_power_flags)}")
+    if insufficient_support_flags:
+        print(f"[fairness_eval] INSUFFICIENT-SUPPORT subgroups (n<{args.min_n} "
+              f"or either class n<{args.min_class_n}; excluded from gaps): "
+              f"{', '.join(insufficient_support_flags)}")
 
 
 if __name__ == "__main__":
