@@ -130,6 +130,9 @@ def load_arms(control_paths: list[Path], pretraining_paths: list[Path],
     patients = sorted(loaded["control"][0])
     expected = set(patients)
     reference = loaded["control"][0]
+    reference_folds = {record.get("outer_fold") for record in reference.values()}
+    if reference_folds != set(range(5)):
+        raise ValueError("predictions must contain all five audited outer folds")
     for arm, runs in loaded.items():
         for run_index, run in enumerate(runs):
             if set(run) != expected:
@@ -140,6 +143,10 @@ def load_arms(control_paths: list[Path], pretraining_paths: list[Path],
                 if (_group_value(run[patient], sensitive, age_cutoff)
                         != _group_value(reference[patient], sensitive, age_cutoff)):
                     raise ValueError(f"{arm} run {run_index}: subgroup mismatch for {patient}")
+                if run[patient].get("outer_fold") != reference[patient].get("outer_fold"):
+                    raise ValueError(
+                        f"{arm} run {run_index}: outer-fold mismatch for {patient}"
+                    )
     return {
         "patients": patients,
         "y": np.asarray([reference[patient]["y_true"] for patient in patients]),
@@ -266,9 +273,115 @@ def load_runtime_contract(path: Path, sensitive: str, run_count: int) -> dict:
     if declaration.get("sensitive") != sensitive:
         raise ValueError("runtime contract sensitive attribute does not match command")
     planned_seeds = declaration.get("planned_head_seeds")
-    if not isinstance(planned_seeds, list) or len(planned_seeds) != run_count:
+    if (not isinstance(planned_seeds, list) or len(planned_seeds) != run_count
+            or not planned_seeds or len(planned_seeds) > 5
+            or len({int(seed) for seed in planned_seeds}) != len(planned_seeds)):
         raise ValueError("prediction run count does not match planned_head_seeds")
     return declaration
+
+
+def validate_run_provenance(
+    prediction_paths: dict[str, list[Path]],
+    result_paths: dict[str, list[Path]],
+    runtime_path: Path,
+    runtime_contract: dict,
+) -> dict[str, list[dict]]:
+    """Bind every prediction file to its reliable runner result and arm role."""
+    arms = ("control", "pretraining", "posthoc")
+    all_prediction_paths = [
+        path.resolve() for arm in arms for path in prediction_paths[arm]
+    ]
+    if len(set(all_prediction_paths)) != len(all_prediction_paths):
+        raise ValueError("the same prediction file cannot be used for multiple runs")
+    runtime_sha256 = sha256_file(runtime_path)
+    planned_seeds = [int(seed) for seed in runtime_contract["planned_head_seeds"]]
+    expected_lambdas = {
+        "control": 0.0,
+        "pretraining": 0.0,
+        "posthoc": float(runtime_contract["posthoc_lambda"]),
+    }
+    evidence: dict[str, list[dict]] = {arm: [] for arm in arms}
+    reference_core_task = None
+    reference_split_seed = int(runtime_contract["fold_seed"])
+    for arm in arms:
+        if len(result_paths[arm]) != len(prediction_paths[arm]):
+            raise ValueError(f"{arm}: result and prediction counts do not match")
+        for index, (prediction_path, result_path) in enumerate(zip(
+            prediction_paths[arm], result_paths[arm]
+        )):
+            result = json.loads(result_path.read_text())
+            reliable = result.get("reliable_fairness") or {}
+            artifact = reliable.get("prediction_artifact") or {}
+            contract = reliable.get("study_cache_contract") or {}
+            checkpoint = reliable.get("checkpoint_identity") or {}
+            checkpoint_training = contract.get("checkpoint_training") or {}
+            intervention = checkpoint_training.get("fairness_intervention") or {}
+            if reliable.get("schema") != "reliable-fairness-head/v2":
+                raise ValueError(f"{arm} run {index}: invalid reliable result schema")
+            if artifact.get("sha256") != sha256_file(prediction_path):
+                raise ValueError(f"{arm} run {index}: prediction digest mismatch")
+            if int(artifact.get("record_count", -1)) <= 0:
+                raise ValueError(f"{arm} run {index}: missing prediction record count")
+            if (artifact.get("required_outer_folds") != list(range(5))
+                    or int(reliable.get("outer_fold_count", -1)) != 5):
+                raise ValueError(f"{arm} run {index}: incomplete outer-fold provenance")
+            runtime_identity = contract.get("runtime_contract") or {}
+            if runtime_identity.get("sha256") != runtime_sha256:
+                raise ValueError(f"{arm} run {index}: runtime contract mismatch")
+            if int(reliable.get("head_seed", -1)) != planned_seeds[index]:
+                raise ValueError(f"{arm} run {index}: head seed is out of order")
+            if int(reliable.get("split_seed", -1)) != reference_split_seed:
+                raise ValueError(f"{arm} run {index}: split seed mismatch")
+            core_task = reliable.get("core_task")
+            reference_core_task = reference_core_task or core_task
+            if not core_task or core_task != reference_core_task:
+                raise ValueError(f"{arm} run {index}: core task mismatch")
+            if not math.isclose(
+                float(result.get("lambda_adv", math.nan)),
+                expected_lambdas[arm], rel_tol=0, abs_tol=1e-12,
+            ):
+                raise ValueError(f"{arm} run {index}: lambda does not match arm role")
+            enabled = intervention.get("enabled")
+            if arm == "pretraining":
+                if (enabled is not True
+                        or intervention.get("objective") != "contrastive-two-condition"
+                        or intervention.get("method") != runtime_contract["method"]
+                        or intervention.get("condition_on") != "cancer"
+                        or not math.isclose(
+                            float(intervention.get("temperature", math.nan)),
+                            float(runtime_contract["temperature"]),
+                            rel_tol=0, abs_tol=1e-12,
+                        )):
+                    raise ValueError(
+                        f"{arm} run {index}: checkpoint does not match pretraining arm"
+                    )
+            elif enabled is not False:
+                raise ValueError(
+                    f"{arm} run {index}: checkpoint is not the plain pretraining arm"
+                )
+            if not checkpoint.get("sha256"):
+                raise ValueError(f"{arm} run {index}: checkpoint digest is missing")
+            evidence[arm].append({
+                "result_file": result_path.name,
+                "result_sha256": sha256_file(result_path),
+                "head_seed": planned_seeds[index],
+                "checkpoint_sha256": checkpoint["sha256"],
+            })
+    for index in range(len(planned_seeds)):
+        if (evidence["control"][index]["checkpoint_sha256"]
+                != evidence["posthoc"][index]["checkpoint_sha256"]):
+            raise ValueError(
+                f"run {index}: control and posthoc must share the plain checkpoint"
+            )
+        if (evidence["control"][index]["checkpoint_sha256"]
+                == evidence["pretraining"][index]["checkpoint_sha256"]):
+            raise ValueError(
+                f"run {index}: pretraining and plain checkpoints must differ"
+            )
+    for arm in arms:
+        if len({row["checkpoint_sha256"] for row in evidence[arm]}) != 1:
+            raise ValueError(f"{arm}: encoder checkpoint changes across head seeds")
+    return evidence
 
 
 def main() -> None:
@@ -276,6 +389,9 @@ def main() -> None:
     parser.add_argument("--control", type=Path, nargs="+", required=True)
     parser.add_argument("--pretraining", type=Path, nargs="+", required=True)
     parser.add_argument("--posthoc", type=Path, nargs="+", required=True)
+    parser.add_argument("--control-results", type=Path, nargs="+", required=True)
+    parser.add_argument("--pretraining-results", type=Path, nargs="+", required=True)
+    parser.add_argument("--posthoc-results", type=Path, nargs="+", required=True)
     parser.add_argument("--runtime-contract", type=Path, required=True)
     parser.add_argument("--sensitive", choices=["race", "sex", "age"], default="race")
     parser.add_argument("--age-cutoff", type=float, default=65.0)
@@ -288,12 +404,25 @@ def main() -> None:
     if args.bootstrap < 100:
         parser.error("--bootstrap must be at least 100")
 
+    runtime_contract = load_runtime_contract(
+        args.runtime_contract, args.sensitive, len(args.control)
+    )
+    prediction_paths = {
+        "control": args.control,
+        "pretraining": args.pretraining,
+        "posthoc": args.posthoc,
+    }
+    result_paths = {
+        "control": args.control_results,
+        "pretraining": args.pretraining_results,
+        "posthoc": args.posthoc_results,
+    }
+    provenance = validate_run_provenance(
+        prediction_paths, result_paths, args.runtime_contract, runtime_contract
+    )
     data = load_arms(
         args.control, args.pretraining, args.posthoc,
         args.sensitive, args.age_cutoff,
-    )
-    runtime_contract = load_runtime_contract(
-        args.runtime_contract, args.sensitive, len(args.control)
     )
     min_fairness_advantage = float(
         runtime_contract.get("min_fairness_advantage", 0.0)
@@ -339,6 +468,7 @@ def main() -> None:
             "bootstrap_seed": args.seed,
         },
         "inputs": data["inputs"],
+        "run_provenance": provenance,
         "runtime_contract": {
             "file": args.runtime_contract.name,
             "sha256": sha256_file(args.runtime_contract),

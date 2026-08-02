@@ -835,6 +835,8 @@ def configure_cache_contract(
             checkpoint_path, map_location="cpu", weights_only=True
         )
         input_identity = checkpoint_payload.get("input_identity") or {}
+        checkpoint_config = checkpoint_payload.get("config") or {}
+        fairness_config = checkpoint_config.get("fino") or {}
         if input_identity.get("holdout_task") != core_task:
             raise ValueError(
                 "checkpoint does not prove exclusion of the downstream task"
@@ -854,6 +856,13 @@ def configure_cache_contract(
             "pretraining_lfs_manifest_sha256": input_identity.get(
                 "pretraining_lfs_manifest_sha256"
             ),
+            "fairness_intervention": {
+                "enabled": bool(fairness_config.get("enabled", False)),
+                "objective": fairness_config.get("objective"),
+                "method": fairness_config.get("method"),
+                "condition_on": fairness_config.get("contrastive_condition_on"),
+                "temperature": fairness_config.get("contrastive_temp"),
+            },
         }
     _CACHE_CONTRACT = {
         "study_task": str(study_task),
