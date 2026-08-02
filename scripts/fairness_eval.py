@@ -46,9 +46,8 @@ Fairness metric definitions
     subgroups -> ES-AUC == AUC_overall; disparity shrinks it.
   * ECE (10-bin, equal-width): ECE = sum_b (n_b/N) * |acc_b - conf_b|.
     ECE-delta (ECEd) = max_g ECE_g - min_g ECE_g over adequately-powered subgroups.
-  * Subgroups with n < MIN_N are REPORTED but flagged low_power and are excluded
-    from the AUCd / ES-AUC / ECEd computations so small cells cannot drive
-    conclusions.
+  * Subgroups with too few total patients OR too few patients in either outcome
+    class are REPORTED but flagged low_power and excluded from gap metrics.
 """
 import argparse
 import glob
@@ -381,7 +380,7 @@ def _safe_auc(y, p):
     return float(roc_auc_score(y, p))
 
 
-def subgroup_report(y, p, group_of, min_n):
+def subgroup_report(y, p, group_of, min_n, min_class_n=5):
     """group_of: array of subgroup labels (str) aligned to y/p; None = exclude
     patient from this attribute. Returns dict with per-subgroup + fairness gaps."""
     y, p = np.asarray(y), np.asarray(p)
@@ -399,9 +398,11 @@ def subgroup_report(y, p, group_of, min_n):
         n = int(len(idx))
         auc = _safe_auc(yy, pp)
         ece = ece_score(yy, pp) if n > 0 else None
-        low_power = n < min_n
+        n_pos = int(yy.sum())
+        n_neg = int((1 - yy).sum())
+        low_power = n < min_n or min(n_pos, n_neg) < min_class_n
         subgroups[g] = {
-            "n": n, "n_pos": int(yy.sum()), "n_neg": int((1 - yy).sum()),
+            "n": n, "n_pos": n_pos, "n_neg": n_neg,
             "auc": auc, "ece": ece, "low_power": low_power,
         }
         if not low_power and auc is not None:
@@ -428,7 +429,7 @@ def subgroup_report(y, p, group_of, min_n):
         "es_auc": es_auc,
         "ece_delta": ece_delta,
         "n_powered_subgroups": len(powered),
-        "min_n": min_n,
+        "min_n": min_n, "min_class_n": min_class_n,
     }
 
 
@@ -476,7 +477,8 @@ def to_markdown(res):
         L.append(f"### {attr}")
         L.append(f"attr AUROC={_f(a['attr_overall_auc'])}  AUCd={_f(a['auc_delta'])}  "
                  f"ES-AUC={_f(a['es_auc'])}  ECEd={_f(a['ece_delta'])}  "
-                 f"(powered subgroups: {a['n_powered_subgroups']}, min_n={a['min_n']})")
+                 f"(powered subgroups: {a['n_powered_subgroups']}, "
+                 f"min_n={a['min_n']}, min_class_n={a['min_class_n']})")
         L.append("| subgroup | n | pos | neg | AUROC | ECE | flag |")
         L.append("|---|---|---|---|---|---|---|")
         for g, s in a["subgroups"].items():
@@ -554,6 +556,8 @@ def main():
     ap.add_argument("--train-tiles-dir", default=None, help="external-test: TCGA-NSCLC tiles")
     ap.add_argument("--train-demographics-csv", default=None, help="external-test: TCGA demographics")
     ap.add_argument("--min-n", type=int, default=15)
+    ap.add_argument("--min-class-n", type=int, default=5,
+                    help="minimum positives and negatives required per subgroup")
     ap.add_argument("--n-splits", type=int, default=5)
     ap.add_argument("--max-slides", type=int, default=0, help="cap slides (0=all; for CPU smoke)")
     ap.add_argument("--max-tiles-per-slide", type=int, default=0, help="cap tiles/slide (0=all)")
@@ -715,7 +719,9 @@ def main():
         f"({int(joined.sum())}/{len(joined)}), age median-split={age_med}")
     assert join_rate > 0.0, "demographics join failed for ALL patients -- check key column"
 
-    attributes = {attr: subgroup_report(y, p_hat, groups[attr], args.min_n)
+    attributes = {attr: subgroup_report(
+        y, p_hat, groups[attr], args.min_n, args.min_class_n
+    )
                   for attr in ("race", "sex", "age")}
 
     # optional per-patient prediction dump (raw material for bootstrap CIs /
@@ -752,6 +758,7 @@ def main():
         "n_patients": len(patient_ids), "n_pos": int(y.sum()), "n_neg": int((1 - y).sum()),
         "tiles_embedded": int(counts.sum()), "join_rate": join_rate,
         "age_median": age_med, "best_C": best_C, "min_n": args.min_n,
+        "min_class_n": args.min_class_n,
         "overall_auc": overall_auc, "attributes": attributes,
         "low_power_flags": low_power_flags,
         "elapsed_sec": round(time.monotonic() - t0, 1),
@@ -766,7 +773,8 @@ def main():
         shutil.rmtree(hf_scratch, ignore_errors=True)
         print(f"[fairness_eval] cleaned HF scratch {hf_scratch}")
     if low_power_flags:
-        print(f"[fairness_eval] LOW-POWER subgroups (n<{args.min_n}, excluded from gaps): "
+        print(f"[fairness_eval] LOW-POWER subgroups (n<{args.min_n} or either "
+              f"class n<{args.min_class_n}; excluded from gaps): "
               f"{', '.join(low_power_flags)}")
 
 
