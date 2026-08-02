@@ -1,25 +1,33 @@
 # Reproducing the study
 
 This repository provides the training, data preparation, post-hoc intervention,
-and evaluation paths for studying fairness intervention timing.
-It intentionally contains no result claims or private patient artifacts.
+and evaluation paths for studying fairness intervention timing. It intentionally
+contains no result claims or private patient artifacts.
 
-## 1. Install
+## 1. Install and record the environment
 
-Python 3.10 or newer and a CUDA-capable PyTorch installation are recommended.
+Python 3.10 or newer is required. Encoder pretraining is a Linux/CUDA workflow;
+CPU execution is supported for unit tests and small plumbing smokes, not for the
+documented pretraining run.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[research,test]'
+python scripts/environment_receipt.py --out outputs/environment.json
 ```
+
+The broad dependency bounds allow researchers to select the correct PyTorch
+build for their CUDA platform. Retain the environment receipt with every run;
+it records exact package, Python, PyTorch, CUDA, cuDNN, accelerator, and source
+versions without recording user or filesystem paths.
 
 ## 2. Prepare the data
 
-The default preparation command downloads the pinned 200-shard public
-pretraining snapshot, retrieves current public TCGA clinical records from the
-NCI GDC API, derives deterministic patient-level task folds, creates the BRCA
-downstream holdout, and builds `fino_meta.json`:
+The default command prepares the pinned pretraining snapshot and clinical
+metadata. It downloads approximately 119.75 GB, retrieves current public TCGA
+clinical records from the NCI GDC API, derives deterministic patient-level task
+folds, creates the BRCA downstream holdout, and builds `fino_meta.json`:
 
 ```bash
 python scripts/prepare_data.py all
@@ -34,35 +42,42 @@ This creates:
 - `data/metadata/downstream_holdout.txt`
 - `data/metadata/METADATA_RECEIPT.json`
 
-The two training recipes both use the generated holdout file, so downstream
-patients are absent from both the plain and fairness-pretrained encoders.
-
-The downstream TCGA-12K tile mirror contains 11,368 Parquet files and
-24,985,184 patches (approximately 703 GB), so it is an explicit opt-in:
+Both pretraining recipes consume the generated holdout, so the downstream BRCA
+patients are excluded from both encoders. The primary timing comparison also
+needs the TCGA-12K mirror: 11,368 Parquet files, 24,985,184 image patches, and
+approximately 703.08 GB. A complete fresh study therefore needs at least 823 GB
+for source tiles, plus checkpoints, caches, and temporary download space:
 
 ```bash
 python scripts/prepare_data.py all --download-downstream
 ```
 
-It is stored under `data/downstream_tiles`. Downloads are resumable through
-`huggingface_hub`. Both tile datasets are pinned to exact repository revisions.
-Validation enforces the complete 200-file pretraining shard set and the pinned
-downstream file-manifest digest and row count, checks Parquet schemas and
-non-empty files, and records machine-readable receipts. For a more expensive
-first-row payload check, add `--deep-validate`.
+That full command also creates `data/metadata/COHORT_RECEIPT.json`, binding the
+labeled GDC cohorts to patients and slides actually present in TCGA-12K. The
+primary runner requires it and checks prediction coverage against it.
 
-The metadata receipt records the exact GDC query, retrieval time, a canonical
-response digest, task/class counts, BRCA subtype inclusion and exclusion
-counts, race missingness, and SHA-256 digests for every derived artifact. The
-CSV retains the source primary-diagnosis strings used by the deterministic
-IDC-versus-ILC mapping. This makes a run auditable even if the live clinical API
-changes later. The API response itself is not redistributed, so retain the
-generated CSV and receipt with each study run.
+Downloads are resumable. Both tile datasets are pinned to exact repository
+revisions and remote LFS content manifests. Validation enforces names, file and
+row counts, byte totals, local size inventories, and exact Arrow field types,
+then writes machine-readable receipts. Add `--deep-validate` for a first-row
+nonempty-payload check. Every TCGA evaluator rechecks the downstream receipt and
+current local inventory before reading tiles.
+
+The metadata receipt records the exact GDC query, retrieval time, canonical
+response digest, task/class counts, BRCA subtype inclusion and exclusion counts,
+race availability, and SHA-256 digests for every derived artifact. The CSV
+retains the diagnosis strings used by the deterministic IDC-versus-ILC mapping.
+Because the live API may change, retain the generated CSV and receipt with each
+study run. A hash-valid existing snapshot is reused rather than silently
+refreshed; use `--refresh-metadata` only as an explicit new-snapshot decision.
 
 Folds are deterministic and patient-level. They stratify each task label by
 race when a race/label cell has at least five patients; smaller cells are
-distributed within the label stratum. Missing race remains explicit in the CSV
-and receipt rather than being silently reassigned.
+distributed within the label stratum. The modeled race groups are White, Black
+or African American, and Asian. The CSV also retains the original GDC value in
+`race_gdc` and records whether it was mapped, missing, not reported, or outside
+the modeled categories. Unmodeled categories are not reassigned. GDC race is an
+administrative social variable, not a biological proxy.
 
 Individual stages are also available:
 
@@ -72,19 +87,23 @@ python scripts/prepare_data.py tiles \
 python scripts/prepare_data.py clinical --holdout-task brca
 python scripts/prepare_data.py validate \
   --dataset downstream --dir data/downstream_tiles --deep
+python scripts/prepare_data.py crosswalk
 ```
 
 Data sources and terms:
 
 - Pretraining tiles: [MedARC Nanopath dataset](https://huggingface.co/datasets/medarc/nanopath).
 - Downstream tiles: [MedARC TCGA-12K Parquet](https://huggingface.co/datasets/medarc/TCGA-12K-parquet), repackaged from GDC open-access TCGA slides.
-- Clinical and demographic fields: [NCI GDC Cases API](https://docs.gdc.cancer.gov/API/Users_Guide/Search_and_Retrieval/).
+- Clinical fields: [NCI GDC Cases API](https://docs.gdc.cancer.gov/API/Users_Guide/Search_and_Retrieval/).
 - Follow the [GDC data-access policy](https://docs.gdc.cancer.gov/Encyclopedia/pages/Data_Access_Policy/) and do not attempt participant re-identification.
 
-The downloader uses only public/open-access endpoints and does not accept or
-store a GDC authentication token. Researchers replacing these inputs with
-controlled-access data remain responsible for their own approvals and secure
-storage.
+The downloader uses only public/open-access endpoints and never accepts a GDC
+authentication token. Researchers substituting controlled-access inputs remain
+responsible for approvals and secure storage.
+
+The pinned Nanopath repository currently has no dataset card or explicit
+license file. Public downloadability is not itself a grant of reuse rights;
+researchers must confirm the upstream TCGA/GDC and dataset terms for their use.
 
 ## 3. Run the matched pretraining arms
 
@@ -94,82 +113,97 @@ WANDB_MODE=offline python pretraining/train.py \
   configs/pretrain_cancer_conditioned_race.yaml
 ```
 
-The two pretraining configs have identical datasets, patient exclusions, model,
-optimization, augmentations, split seed, and compute budgets. Their only
-substantive difference is the intervention block. The fairness objective
-conditions its race-pair construction on cancer identity; that constraint is
-not, by itself, evidence that cancer utility is preserved. The fairness branch
-does not receive a downstream diagnosis label.
+The configs have identical datasets, patient exclusions, models, optimization,
+augmentations, split seeds, and compute budgets. Their only substantive
+difference is the intervention block. The fairness objective conditions its
+race-pair construction on cancer identity; this constraint is not evidence that
+cancer utility is preserved. The fairness branch receives no downstream
+diagnosis label.
 
-The first run downloads Meta's public DINOv2 register-token initialization into
-the standard PyTorch cache and verifies its pinned SHA-256 digest before loading
-it. Subsequent runs recheck and reuse the cached file.
+The first run downloads Meta's public DINOv2 register-token initialization and
+verifies its pinned SHA-256 digest before loading it. Training refuses to
+overwrite a nonempty output directory and verifies the dataset, metadata,
+holdout, and FINO receipts before GPU work.
 
-## 4. Run the matched post-hoc arm
+A configured resume must match the checkpoint's scientific config, source
+commit, input receipts, and RNG record. It restores model, optimizer, counter,
+and RNG state, but restarts the shuffled DataLoader iterator. Treat resume as
+auditable fault recovery, not bitwise-identical continuation.
 
-The post-hoc runner freezes the encoder and trains a plain head (`lambda=0`) and
-an intervened head in the same invocation. Use the same `cancer_type` condition
-as pretraining and the cross-cancer matched pool—not the downstream diagnosis:
+## 4. Run a head-matched timing comparison
 
-```bash
-python scripts/post_hoc_debias.py \
-  --checkpoint outputs/pretrain-plain/latest.pt \
-  --task brca \
-  --tiles-dir data/downstream_tiles \
-  --demographics-csv data/metadata/tcga_demographics.csv \
-  --sensitive race \
-  --adversary-data matched_pool \
-  --method contrastive \
-  --condition-col cancer_type \
-  --proto-temp 0.2 \
-  --lambda-adv 0.1 \
-  --dump-predictions outputs/posthoc/predictions.jsonl \
-  --out outputs/posthoc/summary.json
-```
+Use the reliable runner for all three arms so head architecture, head seed,
+folds, task supervision, and prediction format remain identical:
 
-`--condition-col` accepts any number of categorical strata. Do not replace it
-with `--condition-on-label` in the matched design: that alternate flag exposes
-the downstream binary target to the fairness branch.
+1. plain-pretrained encoder with `lambda=0` (control);
+2. fairness-pretrained encoder with `lambda=0` (pretraining intervention);
+3. plain-pretrained encoder with `lambda>0` (post-hoc intervention).
 
-## 5. Evaluate pretraining checkpoints
-
-```bash
-python scripts/fairness_eval.py \
-  --checkpoint outputs/pretrain-plain/latest.pt \
-  --task brca \
-  --tiles-dir data/downstream_tiles \
-  --demographics-csv data/metadata/tcga_demographics.csv \
-  --test-fold 0 \
-  --dump-predictions outputs/eval/plain-fold0.jsonl \
-  --out outputs/eval/plain-fold0.json
-```
-
-Repeat with the fairness-pretrained checkpoint on the same fold. Predictions
-are patient-pooled and are suitable for paired tests because both arms use the
-same generated patient folds. Run all five held-out folds before drawing a
-cohort-level conclusion. The evaluator flags a subgroup as low-power when it
-has fewer than 15 total patients or fewer than five patients in either outcome
-class; flagged cells are reported but excluded from disparity aggregates.
-
-## 6. Repeated post-hoc heads
-
-For repeated head seeds, create an experiment declaration such as:
+Create `outputs/timing/runtime-contract.json` prospectively:
 
 ```json
 {
   "study": "cancer-conditioned race intervention timing",
-  "split_policy": "fixed five-fold patient split",
-  "downstream_label_access": "task head only"
+  "fold_seed": 1337,
+  "head_architecture": "linear-relu-dropout-linear",
+  "planned_head_seeds": [1],
+  "primary_estimand": "posthoc_auc_gap_minus_pretraining_auc_gap",
+  "min_fairness_advantage": 0.0,
+  "utility_noninferiority_margin": 0.02,
+  "sensitive": "race",
+  "method": "contrastive",
+  "condition_col": "cancer_type",
+  "temperature": 0.2,
+  "posthoc_lambda": 0.1
 }
 ```
 
-Save it as `outputs/posthoc/runtime-contract.json`, then wrap the same post-hoc
-arguments:
+Run the control:
 
 ```bash
 python scripts/reliable_fairness_head.py \
   --head-seed 1 \
-  --runtime-contract outputs/posthoc/runtime-contract.json \
+  --runtime-contract outputs/timing/runtime-contract.json \
+  --checkpoint outputs/pretrain-plain/latest.pt \
+  --task brca \
+  --tiles-dir data/downstream_tiles \
+  --demographics-csv data/metadata/tcga_demographics.csv \
+  --sensitive race \
+  --adversary-data matched_pool \
+  --method contrastive \
+  --condition-col cancer_type \
+  --proto-temp 0.2 \
+  --lambda-adv 0 \
+  --dump-predictions outputs/timing/control-seed1.jsonl \
+  --out outputs/timing/control-seed1.json
+```
+
+Run the pretraining intervention with the same head:
+
+```bash
+python scripts/reliable_fairness_head.py \
+  --head-seed 1 \
+  --runtime-contract outputs/timing/runtime-contract.json \
+  --checkpoint outputs/pretrain-cancer-conditioned-race/latest.pt \
+  --task brca \
+  --tiles-dir data/downstream_tiles \
+  --demographics-csv data/metadata/tcga_demographics.csv \
+  --sensitive race \
+  --adversary-data matched_pool \
+  --method contrastive \
+  --condition-col cancer_type \
+  --proto-temp 0.2 \
+  --lambda-adv 0 \
+  --dump-predictions outputs/timing/pretraining-seed1.jsonl \
+  --out outputs/timing/pretraining-seed1.json
+```
+
+Run the post-hoc intervention on the plain encoder:
+
+```bash
+python scripts/reliable_fairness_head.py \
+  --head-seed 1 \
+  --runtime-contract outputs/timing/runtime-contract.json \
   --checkpoint outputs/pretrain-plain/latest.pt \
   --task brca \
   --tiles-dir data/downstream_tiles \
@@ -180,27 +214,69 @@ python scripts/reliable_fairness_head.py \
   --condition-col cancer_type \
   --proto-temp 0.2 \
   --lambda-adv 0.1 \
-  --out outputs/posthoc/seed-1.json
+  --dump-predictions outputs/timing/posthoc-seed1.jsonl \
+  --out outputs/timing/posthoc-seed1.json
 ```
 
-The wrapper fixes the outer split, separates split and head RNGs, validates the
-embedding cache, records source and checkpoint identities, and writes outputs
-atomically.
+`--condition-col` may have any number of categorical strata. Do not replace it
+with `--condition-on-label`, which exposes the downstream target to the fairness
+branch. The auxiliary pool is selected deterministically at the patient level,
+round-robin across cancer-condition × sensitive-attribute cells. Its seed,
+cell counts, patient-set digest, and slide count are stored in the result.
+
+The reliable runner verifies the metadata receipt and fold seed, separates split
+and head RNGs, validates content-addressed pickle-free caches, records source and
+checkpoint identities, and writes atomically. Repeat the three commands only
+for the prospectively declared head seeds; the example caps the set at five.
+
+## 5. Analyze the paired timing contrast
+
+Pass corresponding prediction files in the same seed order:
+
+```bash
+python scripts/analyze_timing.py \
+  --runtime-contract outputs/timing/runtime-contract.json \
+  --control outputs/timing/control-seed1.jsonl \
+  --pretraining outputs/timing/pretraining-seed1.jsonl \
+  --posthoc outputs/timing/posthoc-seed1.jsonl \
+  --sensitive race \
+  --bootstrap 2000 \
+  --out outputs/timing/analysis.json
+```
+
+For multiple seeds, declare them before running and list every file after its
+corresponding arm flag. The
+analyzer requires identical patients, labels, and subgroup assignments; reports
+each seed; uses a hierarchical paired bootstrap over patients and head seeds;
+and evaluates one primary timing estimand plus an AUROC non-inferiority guardrail.
+Positive primary values favor pretraining.
+
+The default support thresholds—15 total and five patients per outcome class—are
+eligibility heuristics, not a formal power analysis. Age analyses use a fixed
+65-year cutoff across folds unless prospectively overridden.
+
+## 6. Optional logistic-regression diagnostic
+
+`scripts/fairness_eval.py` provides a conventional frozen-encoder logistic-
+regression probe. It is useful for representation diagnostics but must not be
+mixed with the MLP-head outputs in the primary timing comparison. Evaluation
+commands require an existing checkpoint. Random initialization is available
+only through `--allow-random-init` for plumbing smoke tests and must not be
+reported as a scientific run.
 
 ## Verification boundary
 
-Automated tests cover objective behavior, model/head contracts, deterministic
-metadata and fold construction, pinned downloader arguments, Parquet validation,
-CLI loading, and absence of personal absolute paths. A scientific run still
-requires the documented storage and compute budget; tests do not substitute for
-running the complete experiment.
+Automated tests cover executed objective equivalence, model/head contracts,
+deterministic metadata and folds, pinned manifests, receipt binding, cache
+invalidation, baseline invariance, paired analysis, CLI loading, and absence of
+personal paths. Continuous integration runs the suite on Python 3.10 and 3.12.
+Tests do not substitute for the documented storage, compute, and complete runs.
 
 The pretraining and post-hoc interventions share the same cancer-conditioned
-race-pair definition and temperature, but they do not operate in identical
-parameter spaces: pretraining changes the encoder representation, whereas the
-post-hoc objective changes a downstream head on a frozen encoder and sees the
-task label through that head. Consequently, this workflow supports an
-operational timing study, not an assumption-free causal attribution to timing
-alone. A reported study must predeclare its paired estimand, utility guardrail,
-seed/fold aggregation, confidence interval, and multiplicity policy; none is
-implied by the example commands.
+race-pair definition and temperature, but they operate in different parameter
+spaces: pretraining changes the encoder, while post-hoc changes a downstream
+head on a frozen encoder and sees the task label through that head. This is an
+operational timing study, not assumption-free causal attribution to timing.
+The runtime contract and analyzer make the estimand, utility guardrail, seed
+aggregation, confidence interval, and single-primary multiplicity policy
+explicit; researchers remain responsible for justifying those choices.
