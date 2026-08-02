@@ -1,9 +1,8 @@
-"""Disabled-by-default probe contract for the standalone public trainer.
+"""Disabled-by-default probe contract for the standalone trainer.
 
-The original training environment queued a separate internal benchmark suite.
-Public recipes use the standalone evaluation scripts instead.  Keeping these
-small adapters makes ``train.py`` self-contained while failing clearly if an
-unsupported in-training probe is requested.
+The published workflow uses the standalone evaluation scripts. These adapters
+keep ``train.py`` self-contained and fail clearly if unsupported in-training
+probe orchestration is requested.
 """
 
 

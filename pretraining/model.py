@@ -194,7 +194,7 @@ class DinoV2ViT(nn.Module):
 
 
 # Strict-load Meta's pretrained weights for the model's declared variant.
-# Strict matches our key layout against Meta's; any drift fails loudly per AGENTS.md.
+# Strict loading matches our key layout against Meta's and fails on any drift.
 def load_dinov2_pretrained(model):
     *_, url = DINOV2_VARIANTS[model.variant]
     expected = DINOV2_SHA256.get(model.variant)

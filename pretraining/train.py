@@ -7,7 +7,9 @@
 # inline at their use sites.
 
 import contextlib
+import argparse
 import fnmatch
+import hashlib
 import json
 import math
 import os
@@ -26,6 +28,14 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.flop_counter import FlopCounterMode
+
+from pathology_fairness.data_contracts import (
+    DATASETS,
+    PRETRAINING_REVISION,
+    RECEIPT_SCHEMA,
+    validate_dataset_receipt,
+)
+from pathology_fairness.objectives import fair_supcon as shared_fair_supcon
 
 try:
     import wandb
@@ -55,6 +65,7 @@ M3_OBJECTIVES = {
     "dann",
     "pcgrad",
 }
+PRETRAINING_SHARDS = DATASETS["pretraining"]["expected_files"]
 
 
 def resolve_fino_objective(fino_cfg):
@@ -139,29 +150,129 @@ def validate_fino_config(cfg):
 
 
 # Read the YAML recipe and fail before any GPU work if the parquet tile dataset is absent.
-# expandvars is necessary to resolve `$USER` for checked-in configs.
-def load_config():
-    if len(sys.argv) < 2:
-        raise ValueError("usage: python train.py <config.yaml> [output_dir=<path>]")
-    cfg = yaml.safe_load(os.path.expandvars(Path(sys.argv[1]).read_text()))
-    cfg["config_path"] = str(Path(sys.argv[1]).resolve())
+def validate_pretraining_shards(dataset_dir):
+    dataset_dir = Path(dataset_dir)
+    expected = {f"shard-{index:05d}.parquet" for index in range(PRETRAINING_SHARDS)}
+    observed = {path.name for path in dataset_dir.glob("shard-*.parquet")}
+    if observed != expected:
+        missing = sorted(expected - observed)
+        extra = sorted(observed - expected)
+        raise FileNotFoundError(
+            f"pretraining shard set under {dataset_dir} is incomplete: "
+            f"found={len(observed)} expected={PRETRAINING_SHARDS} "
+            f"missing={missing[:5]} extra={extra[:5]}; run "
+            "`python scripts/prepare_data.py all`"
+        )
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_input_receipts(cfg):
+    """Verify the generated data and metadata receipts consumed by training."""
+    dataset_dir = Path(cfg["data"]["dataset_dir"])
+    dataset_identity = validate_dataset_receipt(dataset_dir, "pretraining")
+
+    holdout_path = Path(cfg["data"]["exclude_barcodes_file"])
+    metadata_receipt_path = holdout_path.parent / "METADATA_RECEIPT.json"
+    if not holdout_path.is_file() or not metadata_receipt_path.is_file():
+        raise FileNotFoundError(
+            "missing generated holdout or METADATA_RECEIPT.json; run "
+            "`python scripts/prepare_data.py all`"
+        )
+    metadata_receipt = json.loads(metadata_receipt_path.read_text())
+    expected_holdout_task = cfg["data"].get("holdout_task")
+    if not expected_holdout_task:
+        raise ValueError("data.holdout_task must declare the downstream exclusion")
+    if (metadata_receipt.get("schema") != RECEIPT_SCHEMA
+            or int(metadata_receipt.get("fold_seed", -1)) != 1337
+            or metadata_receipt.get("holdout_task") != expected_holdout_task):
+        raise ValueError(
+            "metadata receipt schema, fold seed, or holdout task does not match config"
+        )
+    expected_holdout = (
+        (metadata_receipt.get("outputs") or {}).get("holdout_file") or {}
+    ).get("sha256")
+    if expected_holdout != sha256_file(holdout_path):
+        raise ValueError("downstream holdout digest does not match metadata receipt")
+
+    identity = {
+        "dataset_receipt_sha256": dataset_identity["receipt_sha256"],
+        "metadata_receipt_sha256": sha256_file(metadata_receipt_path),
+        "holdout_sha256": expected_holdout,
+        "holdout_task": expected_holdout_task,
+        "pretraining_revision": PRETRAINING_REVISION,
+        "pretraining_inventory_sha256": dataset_identity["inventory_sha256"],
+        "pretraining_lfs_manifest_sha256": dataset_identity["lfs_manifest_sha256"],
+    }
+    if (cfg.get("fino") or {}).get("enabled"):
+        fino_path = dataset_dir / "fino_meta.json"
+        expected_fino = (
+            (metadata_receipt.get("outputs") or {}).get("fino_meta") or {}
+        ).get("sha256")
+        if not fino_path.is_file() or expected_fino != sha256_file(fino_path):
+            raise ValueError("fino_meta.json digest does not match metadata receipt")
+        identity["fino_meta_sha256"] = expected_fino
+    return identity
+
+
+def config_identity(cfg):
+    """Hash scientific settings while excluding relocatable run paths."""
+    stable = deepcopy(cfg)
+    stable.pop("config_path", None)
+    stable.pop("input_identity", None)
+    stable.pop("config_sha256", None)
+    (stable.get("train") or {}).pop("resume", None)
+    project = stable.get("project") or {}
+    project.pop("output_dir", None)
+    project.pop("wandb_dir", None)
+    payload = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def load_config(argv=None):
+    parser = argparse.ArgumentParser(description="Train the standalone pathology encoder")
+    parser.add_argument("config", type=Path, help="YAML training recipe")
+    parser.add_argument(
+        "overrides", nargs="*", metavar="key=value",
+        help="supported override: output_dir=<path>",
+    )
+    args = parser.parse_args(argv)
+    cfg = yaml.safe_load(os.path.expandvars(args.config.read_text()))
+    cfg["config_path"] = str(args.config.resolve())
     # Optional `key=value` overrides after the config; only output_dir is supported,
     # since it's the run identifier and routinely set per-submission from the CLI.
-    for arg in sys.argv[2:]:
+    for arg in args.overrides:
         key, _, value = arg.partition("=")
         if key != "output_dir":
             raise ValueError(f"unsupported override {arg!r}; only output_dir=<path> is supported")
         cfg["project"]["output_dir"] = os.path.expandvars(value)
-    dataset_dir = Path(cfg["data"]["dataset_dir"])
-    if not any(dataset_dir.glob("shard-*.parquet")):
-        raise FileNotFoundError(
-            f"No parquet shards (shard-*.parquet) under {dataset_dir}. Pull the 4M-tile "
-            f"parquet dataset from medarc/nanopath on Hugging Face by running "
-            f"`python scripts/prepare_data.py all`. Follow the data setup in "
-            f"docs/REPRODUCIBILITY.md before launching train.py."
-        )
+    validate_pretraining_shards(cfg["data"]["dataset_dir"])
     validate_fino_config(cfg)
+    cfg["input_identity"] = validate_input_receipts(cfg)
+    cfg["config_sha256"] = config_identity(cfg)
     return cfg
+
+
+def prepare_output_dir(output_dir, resume_path):
+    """Create a run directory without deleting pre-existing research outputs."""
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        if not output_dir.is_dir():
+            raise NotADirectoryError(f"output path is not a directory: {output_dir}")
+        if resume_path is None and any(output_dir.iterdir()):
+            raise FileExistsError(
+                f"refusing to overwrite nonempty output directory: {output_dir}; "
+                "choose a new project.output_dir or configure train.resume"
+            )
+    else:
+        output_dir.mkdir(parents=True)
+    return output_dir
 
 
 # Cosine schedule from `start` to `end` over fractional progress in [0, 1].
@@ -247,39 +358,13 @@ def update_ema(student_module, teacher_module, momentum):
 
 
 def fair_supcon(z, y, temp, relation="different", w=None, cond=None):
-    # Generic metadata SupCon over normalized z. "same" preserves a task factor (cancer);
-    # "different" removes a selected demographic factor; "same-condition-different"
-    # removes it within the selected task condition. Every relation keeps all non-self
-    # examples in the denominator, and anchors without positives are omitted.
-    n = z.shape[0]
-    if n < 2:
-        return z.sum() * 0.0
-    y = y.flatten()
-    sim = (z @ z.t()) / temp
-    self_mask = torch.eye(n, dtype=torch.bool, device=z.device)
-    sim = sim.masked_fill(self_mask, float("-inf"))
-    logdenom = torch.logsumexp(sim, dim=1, keepdim=True)
-    logprob = sim - logdenom
-    if relation == "same":
-        pos = (y[:, None] == y[None, :]) & ~self_mask
-    elif relation == "different":
-        pos = (y[:, None] != y[None, :]) & ~self_mask
-    elif relation == "same-condition-different":
-        if cond is None:
-            raise ValueError("same-condition-different SupCon requires condition labels")
-        cond = cond.flatten()
-        pos = (cond[:, None] == cond[None, :]) & (y[:, None] != y[None, :]) & ~self_mask
-    else:
-        raise ValueError(f"unknown SupCon relation: {relation!r}")
-    pos_count = pos.sum(1)
-    valid = pos_count > 0
-    if not bool(valid.any()):
-        return z.sum() * 0.0
-    per_anchor = -(logprob.masked_fill(~pos, 0.0)).sum(1) / pos_count.clamp(min=1)
-    if w is None:
-        return per_anchor[valid].mean()
-    wa = w[y][valid]  # inverse-frequency weight of each valid anchor's own class
-    return (per_anchor[valid] * wa).sum() / wa.sum().clamp(min=1e-12)
+    """Adapt training config names to the shared objective primitive."""
+    relation_name = relation.replace("-", "_")
+    anchor_weights = None if w is None else w[y.flatten().long()]
+    return shared_fair_supcon(
+        z, y, temp, relation=relation_name, condition=cond,
+        anchor_weights=anchor_weights,
+    )
 
 
 def pcgrad_project(g_main, g_dem, params):
@@ -307,12 +392,26 @@ def pcgrad_project(g_main, g_dem, params):
 
 # Orchestrates one pretraining run: setup, train+probe loop, checkpoint, summary.
 def main():
+    cfg = load_config()
     if wandb is None:
         raise ImportError("pretraining requires `pip install -e '.[research]'`")
-    cfg = load_config()
     repo_dir = Path(__file__).resolve().parents[1]
+    git_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True,
+        capture_output=True, check=False,
+    )
+    git_commit = git_result.stdout.strip() if git_result.returncode == 0 else None
     train_cfg = cfg["train"]
     dino_cfg = cfg["dino"]
+    output_dir = Path(cfg["project"]["output_dir"])
+    wandb_dir = Path(cfg["project"]["wandb_dir"])
+    wandb_name = cfg["project"]["name"]
+    resume_path = Path(train_cfg["resume"]) if train_cfg["resume"] else None
+    output_dir = prepare_output_dir(output_dir, resume_path)
+    wandb_dir.mkdir(parents=True, exist_ok=True)
+    latest_checkpoint_path = output_dir / "latest.pt"
+    metrics_path = output_dir / "metrics.jsonl"
+    summary_path = output_dir / "summary.json"
     # FINO metadata-guidance: select factors + signs (float; + encourage M+ / - suppress M-). fino_meta (built or
     # copied beside the dataset by scripts/prepare_data.py) holds per-factor barcode maps + cardinalities (n) / vector dims.
     fino_cfg = cfg["fino"] if (cfg.get("fino") or {}).get("enabled") else None
@@ -340,7 +439,7 @@ def main():
     # factor itself is skipped as a contrastive target.
     contrastive_condition_on = fino_cfg.get("contrastive_condition_on") if fino_cfg else None
     cond_factor_col = [f for f, _ in fino_disc].index(contrastive_condition_on) if contrastive_condition_on else None
-    # Inverse-frequency demographic reweighting (ablation axis; default "none" == current behavior, byte-identical).
+    # Optional inverse-frequency demographic reweighting (default: none).
     # "inverse_freq" upweights minority demographic classes in the discrete-factor loss (see race_weights below).
     race_weight_mode = (fino_cfg.get("race_weight", "none") if fino_cfg else "none")
     if race_weight_mode not in ("none", "inverse_freq"):
@@ -348,7 +447,7 @@ def main():
     # Race-balanced RESAMPLING (3rd race-handling mode, orthogonal to race_weight's loss reweighting).
     # When True the training DataLoader draws tiles via a WeightedRandomSampler with per-tile weight =
     # inverse race-class frequency (dataset.race_sample_weights), so minority races are oversampled to
-    # parity in expectation. Default False -> sampler=None, shuffle=True (byte-identical to prior behavior).
+    # parity in expectation. The default keeps ordinary shuffled sampling.
     # Single-GPU assumption: these fairness runs are single-process (no DDP/DistributedSampler in this
     # train.py), so the weighted sampler simply replaces shuffle without needing a distributed-aware wrapper.
     race_resample = bool(fino_cfg.get("race_resample", False)) if fino_cfg else False
@@ -467,24 +566,24 @@ def main():
     examples_seen = 0
     visible_patch_presentations = 0
     train_flops = 0
-    output_dir = Path(cfg["project"]["output_dir"])
-    wandb_dir = Path(cfg["project"]["wandb_dir"])
-    wandb_name = cfg["project"]["name"]
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
-    latest_checkpoint_path = output_dir / "latest.pt"
-    # Fresh launches always start from scratch and wipe output_dir.
-    resume_path = Path(train_cfg["resume"]) if train_cfg["resume"] else None
-    if resume_path is None and output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    wandb_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = output_dir / "metrics.jsonl"
-    summary_path = output_dir / "summary.json"
     wandb_meta = None
+    resume_rng = None
     if resume_path is not None:
+        if not resume_path.is_file() or resume_path.is_symlink():
+            raise FileNotFoundError(
+                f"resume checkpoint must be a regular non-symlink file: {resume_path}"
+            )
         print(f"{console_prefix()} Resume  loading checkpoint: {resume_path}", flush=True)
-        # Resume restores training progress, optimizer state, and wandb identity.
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        # Resume restores state and RNG. The DataLoader starts a new shuffled
+        # iterator, so continuation is auditable but not bitwise identical.
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+        if checkpoint.get("config_sha256") != cfg["config_sha256"]:
+            raise ValueError("resume checkpoint scientific config does not match")
+        if checkpoint.get("input_identity") != cfg["input_identity"]:
+            raise ValueError("resume checkpoint data/metadata identity does not match")
+        if checkpoint.get("source_commit") != git_commit:
+            raise ValueError("resume checkpoint source commit does not match")
         student_backbone.load_state_dict(checkpoint["model"])
         teacher_backbone.load_state_dict(checkpoint["model_ema"])
         student_dino_head.load_state_dict(checkpoint["dino_head"])
@@ -502,6 +601,9 @@ def main():
         visible_patch_presentations = int(checkpoint["visible_patch_presentations"])
         train_flops = int(checkpoint["train_flops"])
         wandb_meta = dict(checkpoint["wandb"])
+        resume_rng = checkpoint.get("rng")
+        if not resume_rng:
+            raise ValueError("resume checkpoint is missing RNG state")
     wandb_init = {
         "project": "nanopath",
         "name": wandb_name,
@@ -528,8 +630,6 @@ def main():
         f"layerwise_decay: {dino_cfg['layerwise_decay']}",
         flush=True,
     )
-    git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
-    git_remote = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=repo_dir, text=True, capture_output=True, check=False).stdout.strip()
     source_id = f"nanopath-source-{wandb_run.id}"
     artifact_ignore = [
         line.strip() for line in (repo_dir / ".gitignore").read_text().splitlines()
@@ -568,7 +668,7 @@ def main():
         shutil.copy2(path, target)
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
-                  "source_dir": str(source_snapshot_dir), "git": {"commit": git_commit, "remote": git_remote}}
+                  "git": {"commit": git_commit}}
     train_ds = TCGATileDataset(cfg, is_train=True)
     val_ds = TCGATileDataset(cfg, is_train=False)
     probe_state = prepare_probe_state(cfg, output_dir) if probe_enabled(cfg) else None
@@ -580,7 +680,7 @@ def main():
                          persistent_workers=train_cfg["persistent_workers"] and train_cfg["num_workers"] > 0)
     # Race-balanced resampling: build a WeightedRandomSampler over the train split (replacement=True,
     # one epoch's worth of draws) that oversamples minority races to parity. Only when fino.race_resample;
-    # otherwise train_sampler stays None and the loader keeps shuffle=True (byte-identical default path).
+    # otherwise the loader keeps ordinary shuffled sampling.
     train_sampler = None
     if race_resample:
         race_w = train_ds.factor_sample_weights(resample_factor)
@@ -608,10 +708,32 @@ def main():
     # Full checkpoint (latest.pt) covers explicit train.resume whereas probe checkpoint is a slim
     # weights-only ckpt, given probe.py does not need optimizer or projection heads.
     def checkpoint_payload(next_step, full):
-        payload = {"model": cpu_state(student_backbone), "model_ema": cpu_state(teacher_backbone), "step": next_step, "config": cfg}
+        payload = {
+            "model": cpu_state(student_backbone),
+            "model_ema": cpu_state(teacher_backbone),
+            "step": next_step,
+            "config": cfg,
+            "config_sha256": cfg["config_sha256"],
+            "input_identity": cfg["input_identity"],
+            "source_commit": git_commit,
+        }
         if not full:
             return payload
-        return {**payload, "dino_head": cpu_state(student_dino_head), "dino_head_ema": cpu_state(teacher_dino_head),
+        numpy_rng = np.random.get_state()
+        rng = {
+            "python": random.getstate(),
+            "numpy": {
+                "algorithm": numpy_rng[0],
+                "keys": numpy_rng[1].tolist(),
+                "position": int(numpy_rng[2]),
+                "has_gauss": int(numpy_rng[3]),
+                "cached_gaussian": float(numpy_rng[4]),
+            },
+            "torch": torch.random.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state(device),
+        }
+        return {**payload, "rng": rng,
+                "dino_head": cpu_state(student_dino_head), "dino_head_ema": cpu_state(teacher_dino_head),
                 "predictor": cpu_state(student_predictor), "opt": opt.state_dict(),
                 "examples_seen": examples_seen, "visible_patch_presentations": visible_patch_presentations,
                 "train_flops": train_flops, "wandb": wandb_meta,
@@ -843,6 +965,19 @@ def main():
     # Counts the EMA teacher forward + DINO/JEPA heads, not just the backbone, so the
     # 1e18 leaderboard cap reflects real GPU work.
     measured_flops_per_step = None
+
+    if resume_rng is not None:
+        random.setstate(tuple(resume_rng["python"]))
+        numpy_rng = resume_rng["numpy"]
+        np.random.set_state((
+            numpy_rng["algorithm"],
+            np.asarray(numpy_rng["keys"], dtype=np.uint32),
+            int(numpy_rng["position"]),
+            int(numpy_rng["has_gauss"]),
+            float(numpy_rng["cached_gaussian"]),
+        ))
+        torch.random.set_rng_state(resume_rng["torch"])
+        torch.cuda.set_rng_state(resume_rng["cuda"], device)
 
     while examples_seen + batch_size <= max_train_samples and train_flops < max_train_flops:
         for batch in train_loader:
