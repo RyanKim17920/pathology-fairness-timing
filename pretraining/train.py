@@ -234,6 +234,30 @@ def config_identity(cfg):
     return hashlib.sha256(payload).hexdigest()
 
 
+def clean_source_commit(repo_dir):
+    """Return HEAD only when tracked source exactly matches that commit."""
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True,
+        capture_output=True, check=False,
+    )
+    commit = revision.stdout.strip()
+    if revision.returncode != 0 or not commit:
+        raise RuntimeError("pretraining must run from a Git checkout")
+    for command in (
+        ["git", "diff", "--quiet"],
+        ["git", "diff", "--cached", "--quiet"],
+    ):
+        result = subprocess.run(command, cwd=repo_dir, check=False)
+        if result.returncode == 1:
+            raise RuntimeError(
+                "tracked source has uncommitted changes; commit or restore it "
+                "before a research run"
+            )
+        if result.returncode != 0:
+            raise RuntimeError("cannot verify tracked source state")
+    return commit
+
+
 def load_config(argv=None):
     parser = argparse.ArgumentParser(description="Train the standalone pathology encoder")
     parser.add_argument("config", type=Path, help="YAML training recipe")
@@ -395,11 +419,7 @@ def main():
     if wandb is None:
         raise ImportError("pretraining requires `pip install -e '.[research]'`")
     repo_dir = Path(__file__).resolve().parents[1]
-    git_result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True,
-        capture_output=True, check=False,
-    )
-    git_commit = git_result.stdout.strip() if git_result.returncode == 0 else None
+    git_commit = clean_source_commit(repo_dir)
     train_cfg = cfg["train"]
     dino_cfg = cfg["dino"]
     output_dir = Path(cfg["project"]["output_dir"])
@@ -645,12 +665,15 @@ def main():
             raise FileNotFoundError(f"tracked source is not a regular file: {relative}")
         source_files.append((path, relative))
     source_snapshot_dir = output_dir / "source_snapshot"
-    if source_snapshot_dir.exists():
-        shutil.rmtree(source_snapshot_dir)
-    for path, rel in source_files:
-        target = source_snapshot_dir / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
+    if not source_snapshot_dir.exists():
+        for path, rel in source_files:
+            target = source_snapshot_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+    elif resume_path is None:
+        raise FileExistsError(
+            f"unexpected existing source snapshot: {source_snapshot_dir}"
+        )
     wandb_meta = {"entity": wandb_run.entity, "project": "nanopath", "id": wandb_run.id, "name": wandb_name, "url": wandb_run.url,
                   "mode": getattr(wandb_run.settings, "mode", ""), "source_artifact": source_id,
                   "git": {"commit": git_commit}}
