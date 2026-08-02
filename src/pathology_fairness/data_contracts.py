@@ -132,6 +132,15 @@ def validate_dataset_receipt(root: Path, dataset: str) -> dict[str, Any]:
         raise ValueError(
             f"{dataset} DATASET_RECEIPT.json does not match the pinned contract"
         )
+    contracted_files = set(dataset_files(root, dataset))
+    recursive_parquets = {path for path in root.rglob("*.parquet") if path.is_file()}
+    unexpected_parquets = sorted(recursive_parquets - contracted_files)
+    if unexpected_parquets:
+        relative = [path.relative_to(root).as_posix() for path in unexpected_parquets]
+        raise ValueError(
+            f"{dataset} root contains Parquet files outside the pinned manifest: "
+            f"{relative[:5]}"
+        )
     current = local_inventory(root, dataset)
     for field in ("file_count", "manifest_sha256", "inventory_sha256", "total_bytes"):
         if current[field] != local.get(field):

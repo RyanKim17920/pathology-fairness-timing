@@ -221,6 +221,13 @@ def test_dataset_receipt_is_bound_to_current_local_inventory(tmp_path, monkeypat
     identity = data_contracts.validate_dataset_receipt(tmp_path, "downstream")
     assert identity["inventory_sha256"] == inventory["inventory_sha256"]
 
+    contaminant = tmp_path / "extra" / "contaminant.parquet"
+    contaminant.parent.mkdir()
+    contaminant.write_bytes(b"not-part-of-the-pinned-snapshot")
+    with pytest.raises(ValueError, match="outside the pinned manifest"):
+        data_contracts.validate_dataset_receipt(tmp_path, "downstream")
+    contaminant.unlink()
+
     shard.write_bytes(b"changed-size")
     with pytest.raises(ValueError, match="local inventory"):
         data_contracts.validate_dataset_receipt(tmp_path, "downstream")
